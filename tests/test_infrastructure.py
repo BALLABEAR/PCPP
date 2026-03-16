@@ -17,6 +17,8 @@ import redis
 import boto3
 from botocore.exceptions import EndpointResolutionError, ClientError
 from botocore.config import Config
+from dotenv import load_dotenv
+load_dotenv()
 
 # ─── Настройки подключения (читаем из окружения, с дефолтами для локальной разработки)
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
