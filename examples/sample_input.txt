@@ -1,0 +1,1 @@
+This is a fake input file for sleep_worker example.

@@ -38,6 +38,9 @@ pytest tests/test_infrastructure.py -v
 
 # Запустить тест этапа 2 (сквозной сценарий)
 pytest tests/test_stage2_flow.py -v
+
+# Запустить тест onboarding-каркаса этапа 3 (fake sleep_worker)
+pytest tests/test_stage3_worker_scaffold.py -v
 ```
 
 Все тесты должны быть зелёными.
@@ -70,6 +73,7 @@ pcpp/
 ├── docker-compose.phase2.yml       # Фаза 2 — Triton и др.
 ├── .env                            # локальные секреты (не коммитится)
 ├── .env.example                    # шаблон для .env
+├── requirements-dev.txt            # локальные dev-зависимости
 ├── tests/
 │   ├── requirements.txt
 │   └── test_infrastructure.py      # тесты этапа 1
@@ -91,7 +95,25 @@ pcpp/
 │   ├── pipeline_flow.py            # тестовый flow (MinIO -> sleep 5s -> MinIO)
 │   └── flows_registry.py           # реестр flow для orchestrator
 ├── workers/testing/sleep_worker/
-│   └── model_card.yaml             # тестовая модель этапа 2
+│   ├── worker.py                   # fake-модель для onboarding
+│   ├── model_card.yaml
+│   ├── requirements.txt
+│   └── Dockerfile
+├── workers/base/base_worker.py     # базовый контракт для будущих ML-воркеров
+├── workers/completion/snowflake_net/
+│   ├── worker.py                   # scaffold completion-воркера
+│   ├── model_card.yaml             # карточка модели для реестра
+│   ├── requirements.txt
+│   └── Dockerfile
+├── benchmark/
+│   ├── run_benchmark.py            # шаблон запуска замеров
+│   └── results.md                  # шаблон фиксации результатов
+├── docs/
+│   └── adding_github_model_stage3.md
+├── examples/
+│   ├── run_fake_model.ps1          # быстрый запуск fake-модели (Windows)
+│   ├── run_fake_model.sh           # быстрый запуск fake-модели (Linux/macOS)
+│   └── sample_input.txt
 └── ...
 ```
 
@@ -132,3 +154,34 @@ pcpp/
 - Сканер `model_card.yaml` при старте orchestrator
 - Prefect flow `stage2-test-flow`: скачивает файл из MinIO, ждёт 5 секунд, сохраняет копию в `pcpp-results`
 - Базовое логирование в orchestrator и во flow
+
+---
+
+## Подготовка к Этапу 3 (scaffold)
+
+- Добавлен универсальный `BaseWorker` (`workers/base/base_worker.py`)
+- Добавлен каркас completion-воркера `snowflake_net`
+- Добавлена fake-модель `workers/testing/sleep_worker` для простого onboarding
+- Добавлен шаблон benchmark-скрипта и таблицы результатов
+- Добавлен тест `tests/test_stage3_worker_scaffold.py`
+- Добавлен гайд `docs/adding_github_model_stage3.md` в формате:
+  - Quick Start для новичков
+  - Template Section для подключения любой модели из GitHub
+- Добавлены `examples/` для запуска fake-модели без написания кода
+
+## Для пользователей без опыта
+
+- Начните с `docs/adding_github_model_stage3.md` (раздел Quick Start)
+- Запустите fake-модель через `examples/run_fake_model.ps1` или `examples/run_fake_model.sh`
+- Проверяйте работоспособность через `tests/test_stage3_worker_scaffold.py`
+
+## Tests vs Examples
+
+- `tests/` — автотесты для CI и технической проверки.
+- `examples/` — пошаговые учебные сценарии для пользователей.
+
+## Файлы зависимостей
+
+- `orchestrator/requirements.txt` — зависимости runtime оркестратора
+- `tests/requirements.txt` — зависимости для тестов
+- `requirements-dev.txt` — локальные dev-зависимости
