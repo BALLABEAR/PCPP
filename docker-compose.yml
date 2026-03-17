@@ -76,6 +76,50 @@ services:
       "
     restart: "no"
 
+  # ── Prefect Server ──────────────────────────────────────────────────────────
+  prefect_server:
+    image: prefecthq/prefect:2-latest
+    container_name: pcpp_prefect_server
+    restart: unless-stopped
+    environment:
+      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: >
+      prefect server start --host 0.0.0.0 --port 4200
+    ports:
+      - "4200:4200"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── FastAPI Orchestrator (Этап 2) ──────────────────────────────────────────
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    container_name: pcpp_orchestrator
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PREFECT_API_URL: http://prefect_server:4200/api
+      WORKSPACE_ROOT: /app
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET_FILES: ${MINIO_BUCKET_FILES}
+      MINIO_BUCKET_RESULTS: ${MINIO_BUCKET_RESULTS}
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio_init:
+        condition: service_completed_successfully
+      prefect_server:
+        condition: service_started
+
 volumes:
   postgres_data:
   redis_data:

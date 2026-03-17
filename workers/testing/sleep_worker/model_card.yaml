@@ -1,0 +1,10 @@
+id: sleep_worker
+name: SleepWorker
+task_type: testing
+description: >
+  Тестовый воркер этапа 2: читает файл из MinIO,
+  имитирует обработку 5 секунд и возвращает копию результата.
+input_format: [.ply, .pcd, .xyz, .pts, .txt]
+output_format: [.ply, .pcd, .xyz, .pts, .txt]
+gpu_required: false
+batching_mode: disabled

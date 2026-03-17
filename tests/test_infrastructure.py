@@ -1,10 +1,4 @@
 """
-Тесты инфраструктуры — Фаза 1, Этап 1.
-
-TDD-подход: эти тесты написаны ДО того как сервисы подняты.
-Запусти их сначала — все упадут (RED).
-Подними docker-compose up -d — все пройдут (GREEN).
-
 Запуск:
     pip install pytest psycopg2-binary redis boto3
     pytest tests/test_infrastructure.py -v
@@ -20,7 +14,9 @@ from botocore.config import Config
 from dotenv import load_dotenv
 load_dotenv()
 
-# ─── Настройки подключения (читаем из окружения, с дефолтами для локальной разработки)
+# ─── Настройки подключения (читаем из окружения, с
+#
+# дефолтами для локальной разработки)
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_DB   = os.getenv("POSTGRES_DB",   "pcpp")

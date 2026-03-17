@@ -2,14 +2,14 @@
 
 Модульная платформа для обработки облаков точек с кастомными пайплайнами.
 
-## Быстрый старт
+## Быстрый старт (Этап 2)
 
 ### Требования
 - Docker Desktop
 - Python 3.11+
 - Git
 
-### Запуск инфраструктуры
+### Запуск сервисов
 
 ```bash
 # 1. Клонировать репозиторий
@@ -20,8 +20,8 @@ cd pcpp
 cp .env.example .env
 # Отредактировать .env при необходимости
 
-# 3. Поднять сервисы
-docker compose up -d
+# 3. Поднять сервисы этапа 2
+docker compose up -d --build
 
 # 4. Проверить что всё запустилось
 docker compose ps
@@ -33,8 +33,11 @@ docker compose ps
 # Установить зависимости для тестов
 pip install -r tests/requirements.txt
 
-# Запустить тесты инфраструктуры
+# Запустить тесты этапа 1 (инфраструктура)
 pytest tests/test_infrastructure.py -v
+
+# Запустить тест этапа 2 (сквозной сценарий)
+pytest tests/test_stage2_flow.py -v
 ```
 
 Все тесты должны быть зелёными.
@@ -44,8 +47,10 @@ pytest tests/test_infrastructure.py -v
 | Сервис     | Адрес                  | Логин/Пароль                    |
 |------------|------------------------|---------------------------------|
 | MinIO UI   | http://localhost:9001  | pcpp_minio / pcpp_minio_secret  |
-| PostgreSQL | localhost:5432         | pcpp_user / pcpp_password       |
+| PostgreSQL | localhost:5433         | pcpp_user / pcpp_password       |
 | Redis      | localhost:6379         | —                               |
+| FastAPI    | http://localhost:8000  | —                               |
+| Prefect UI | http://localhost:4200  | —                               |
 
 ### Остановка
 
@@ -68,7 +73,26 @@ pcpp/
 ├── tests/
 │   ├── requirements.txt
 │   └── test_infrastructure.py      # тесты этапа 1
-└── ...                             # остальное появится в следующих этапах
+├── orchestrator/
+│   ├── main.py                     # точка входа FastAPI + подключение роутеров
+│   ├── api/
+│   │   ├── files.py                # загрузка / скачивание файлов
+│   │   ├── tasks.py                # запуск задачи и статус
+│   │   ├── pipelines.py            # API пайплайнов
+│   │   └── registry.py             # API реестра моделей
+│   ├── models/
+│   │   ├── pipeline.py
+│   │   ├── task.py
+│   │   └── model_card.py
+│   ├── registry/scanner.py         # сканирование model_card.yaml
+│   ├── prefect_client.py           # единая точка связи FastAPI -> Prefect flow
+│   └── ...
+├── flows/
+│   ├── pipeline_flow.py            # тестовый flow (MinIO -> sleep 5s -> MinIO)
+│   └── flows_registry.py           # реестр flow для orchestrator
+├── workers/testing/sleep_worker/
+│   └── model_card.yaml             # тестовая модель этапа 2
+└── ...
 ```
 
 ---
@@ -77,7 +101,7 @@ pcpp/
 
 ### Фаза 1
 - [x] **Этап 1** — Инфраструктура: PostgreSQL, Redis, MinIO
-- [ ] **Этап 2** — FastAPI + Prefect + тестовый воркер
+- [x] **Этап 2** — FastAPI + Prefect + тестовый воркер
 - [ ] **Этап 3** — Первая нейросеть + бенчмарк
 - [ ] **Этап 4** — Вторая модель + DAG
 - [ ] **Этап 5** — Robustness BaseWorker
@@ -94,3 +118,17 @@ pcpp/
 - [ ] Отказоустойчивость
 - [ ] Свой Frontend
 - [ ] CI/CD
+
+---
+
+## Что реализовано в Этапе 2
+
+- FastAPI endpoints:
+  - `POST /files/upload` — загрузка входного файла в MinIO (`pcpp-files`)
+  - `GET /files/download` — получение временной ссылки на скачивание из MinIO
+  - `POST /tasks` — создание задачи и запуск Prefect flow
+  - `GET /tasks/{task_id}` — получение статуса (`pending/running/completed/failed`)
+- SQLAlchemy модели: `Task`, `Pipeline`, `ModelCard`
+- Сканер `model_card.yaml` при старте orchestrator
+- Prefect flow `stage2-test-flow`: скачивает файл из MinIO, ждёт 5 секунд, сохраняет копию в `pcpp-results`
+- Базовое логирование в orchestrator и во flow
