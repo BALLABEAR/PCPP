@@ -42,3 +42,29 @@ Thumbs.db
 *.ply
 *.pcd
 workers/*/models/weights/
+
+# ── User examples output ──────────────────────────────────────────────────────
+examples/out/
+examples/model_outputs/
+
+# ── External model repositories (downloaded from GitHub) ─────────────────────
+external_models/
+
+# ── User-installed model folders (keep templates out of git by default) ──────
+workers/segmentation/**
+workers/completion/**
+workers/meshing/**
+workers/preprocessing/**
+workers/training/**
+
+# Keep onboarding/testing scaffolds tracked
+!workers/testing/
+!workers/testing/**
+!workers/base/
+!workers/base/**
+
+# Re-ignore caches inside whitelisted scaffolds
+workers/testing/**/__pycache__/
+workers/base/**/__pycache__/
+workers/testing/**/*.py[cod]
+workers/base/**/*.py[cod]

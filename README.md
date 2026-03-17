@@ -100,11 +100,9 @@ pcpp/
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── workers/base/base_worker.py     # базовый контракт для будущих ML-воркеров
-├── workers/completion/snowflake_net/
-│   ├── worker.py                   # scaffold completion-воркера
-│   ├── model_card.yaml             # карточка модели для реестра
-│   ├── requirements.txt
-│   └── Dockerfile
+├── workers/completion/             # пользовательские completion-модели (gitignored)
+├── workers/segmentation/           # пользовательские segmentation-модели (gitignored)
+├── workers/meshing/                # пользовательские meshing-модели (gitignored)
 ├── benchmark/
 │   ├── run_benchmark.py            # шаблон запуска замеров
 │   └── results.md                  # шаблон фиксации результатов
@@ -113,6 +111,12 @@ pcpp/
 ├── examples/
 │   ├── run_fake_model.ps1          # быстрый запуск fake-модели (Windows)
 │   ├── run_fake_model.sh           # быстрый запуск fake-модели (Linux/macOS)
+│   ├── run_snowflake_model.ps1     # запуск Snowflake wrapper (Windows)
+│   ├── run_snowflake_model.sh      # запуск Snowflake wrapper (Linux/macOS)
+│   ├── run_snowflake_model_docker.ps1 # запуск Snowflake через GPU Docker (Windows)
+│   ├── run_snowflake_model_docker.sh  # запуск Snowflake через GPU Docker (Linux/macOS)
+│   ├── model_inputs/               # сюда кладутся пользовательские test-файлы
+│   ├── model_outputs/              # результаты (gitignored)
 │   └── sample_input.txt
 └── ...
 ```
@@ -160,7 +164,6 @@ pcpp/
 ## Подготовка к Этапу 3 (scaffold)
 
 - Добавлен универсальный `BaseWorker` (`workers/base/base_worker.py`)
-- Добавлен каркас completion-воркера `snowflake_net`
 - Добавлена fake-модель `workers/testing/sleep_worker` для простого onboarding
 - Добавлен шаблон benchmark-скрипта и таблицы результатов
 - Добавлен тест `tests/test_stage3_worker_scaffold.py`
@@ -173,12 +176,21 @@ pcpp/
 
 - Начните с `docs/adding_github_model_stage3.md` (раздел Quick Start)
 - Запустите fake-модель через `examples/run_fake_model.ps1` или `examples/run_fake_model.sh`
+- Для реального Snowflake запускайте `examples/run_snowflake_model.ps1` (или `.sh`)
+- Если локальный Python не собирает CUDA-расширения, используйте Docker-вариант:
+  `examples/run_snowflake_model_docker.ps1` (или `.sh`)
 - Проверяйте работоспособность через `tests/test_stage3_worker_scaffold.py`
 
 ## Tests vs Examples
 
 - `tests/` — автотесты для CI и технической проверки.
 - `examples/` — пошаговые учебные сценарии для пользователей.
+
+## Где хранить реальные модели
+
+- Репозитории моделей (скачанные с GitHub) храните в `external_models/` (папка в `.gitignore`).
+- Рабочие обертки под PCPP кладите в `workers/<task_type>/<model_name>/`.
+- Папки `workers/completion`, `workers/segmentation`, `workers/meshing` по умолчанию игнорируются git, чтобы в репозиторий не попадали тяжелые модели/веса.
 
 ## Файлы зависимостей
 

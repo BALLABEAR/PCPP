@@ -55,6 +55,99 @@ pytest tests/test_stage3_worker_scaffold.py -v
 
 ---
 
+## Пример: куда скачивать SnowflakeNet и что делать дальше
+
+Ниже конкретный путь для ситуации "я открыл GitHub и не понимаю куда копировать":
+
+### 1) Скачайте внешний репозиторий ВНЕ `workers/`
+
+```bash
+mkdir -p external_models
+git clone https://github.com/AllenXiangX/SnowflakeNet external_models/SnowflakeNet
+```
+
+Важно: внешний код храните в `external_models/`, а не в `workers/`.
+`external_models/` уже в `.gitignore`, поэтому тяжелые файлы не попадут в git.
+
+### 2) Создайте обертку под PCPP
+
+Внутри PCPP создайте свою папку:
+
+`workers/completion/snowflake_net/`
+
+И добавьте 4 файла:
+
+- `worker.py`
+- `model_card.yaml`
+- `requirements.txt`
+- `Dockerfile`
+
+### 3) Перенесите только нужный код в `worker.py`
+
+Не копируйте весь репозиторий SnowflakeNet в `workers/`.
+В `worker.py` оставьте только интеграционный слой:
+
+1. загрузка весов,
+2. вызов инференса из внешнего кода (`external_models/SnowflakeNet/...`),
+3. сохранение результата.
+
+### 4) Учитывайте особенности SnowflakeNet из их README
+
+У SnowflakeNet в оригинале указан стек под старую среду (например Python 3.7, PyTorch 1.7.1, CUDA 11.0 и сборка расширений `pointnet2_ops`, `Chamfer3D`, `emd`).
+Это не значит, что надо менять весь PCPP под 3.7. Правильный путь:
+
+- изолировать эти зависимости в Dockerfile конкретного воркера,
+- проверить сборку расширений внутри контейнера воркера,
+- не смешивать зависимости SnowflakeNet с orchestrator/tests.
+
+### 5) Папка для пользовательских тестов модели
+
+Используйте:
+
+- `examples/model_inputs/` — входные тестовые облака (например `sofa.pcd`, `input.ply`, `airplane.pcd`)
+- `examples/model_outputs/` — результаты запуска
+
+Готовые скрипты:
+
+- Windows: `./examples/run_snowflake_model.ps1`
+- Linux/macOS: `bash ./examples/run_snowflake_model.sh`
+
+Текущий Snowflake wrapper уже умеет читать `.pcd`, `.ply`, `.xyz`, `.txt`, `.npy`.
+
+---
+
+## Рекомендуемый способ для "чтобы точно работало": Docker GPU
+
+Если локальная сборка в `.venv` падает (CUDA_HOME, pointnet2_ops, torch), используйте готовый docker-сценарий.
+
+### Windows
+
+```powershell
+./examples/run_snowflake_model_docker.ps1
+```
+
+### Linux/macOS
+
+```bash
+bash ./examples/run_snowflake_model_docker.sh
+```
+
+Что делает скрипт:
+
+1. Собирает GPU-образ из `workers/completion/snowflake_net/Dockerfile`
+2. Устанавливает PyTorch + CUDA и собирает расширение `pointnet2_ops` внутри контейнера
+3. Запускает инференс и пишет результат в `examples/model_outputs/`
+
+Примечание: `Chamfer3D` и `EMD` нужны в основном для train/eval loss и в инференс-образ не включены для повышения стабильности сборки.
+
+Требования:
+
+- Docker Desktop / Docker Engine
+- NVIDIA Container Toolkit (доступ к GPU из Docker)
+- драйвер NVIDIA на хосте
+
+---
+
 ## Template Section: как подключить любую модель из GitHub
 
 ## 1) Выберите модель и зафиксируйте источник
@@ -161,4 +254,87 @@ CMD ["python", "-m", "workers.<task_type>.<model_name>.worker", "--help"]
 3. `curl /registry/models` и проверка `id`.
 4. Замеры через `benchmark/run_benchmark.py`.
 5. Фиксация результатов в `benchmark/results.md`.
+
+---
+
+## Troubleshooting (частые ошибки и решения)
+
+### `{"detail":"Not Found"}` на `http://localhost:8000/registry/models`
+
+Причина: запущен старый orchestrator-контейнер без нового роута.
+
+Решение:
+
+```bash
+docker compose up -d --build orchestrator
+```
+
+### `ModuleNotFoundError: No module named 'workers'` при pytest
+
+Причина: тесты запущены не из корня проекта или не настроен путь импорта.
+
+Решение:
+
+- запускать из корня `PCPP`
+- использовать `python -m pytest ...`
+- в проекте уже есть `tests/conftest.py` для авто-добавления корня в `sys.path`
+
+### `unexpected EOF` / `short read` во время `docker build`
+
+Причина: обрыв сети/битый кэш Docker при скачивании больших слоев.
+
+Решение:
+
+```bash
+docker builder prune -af
+docker image prune -af
+docker pull nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+```
+
+и повторить запуск скрипта.
+
+### `CUDA_HOME environment variable is not set` при локальной сборке extension
+
+Причина: локальный `.venv` не видит CUDA toolkit.
+
+Решение:
+
+- использовать Docker GPU-скрипт (рекомендуется),
+- или настраивать локальный CUDA toolkit и `CUDA_HOME` вручную.
+
+### `No module named 'pointnet2_ops'`
+
+Причина: не собран extension SnowflakeNet.
+
+Решение:
+
+- в Docker-режиме extension собирается автоматически,
+- в локальном режиме нужно выполнять `setup.py install` в `models/pointnet2_ops_lib`.
+
+### Ошибка Open3D в контейнере (`libX11.so.6` и т.п.)
+
+Причина: не хватает системных Linux-библиотек для Open3D.
+
+Решение:
+
+- использовать актуальный Dockerfile из проекта (в нем зависимости уже добавлены),
+- пересобрать образ.
+
+### Ошибка пути в Docker (`Input file not found: .\\examples\\...`)
+
+Причина: в Linux-контейнер передан Windows-стиль пути.
+
+Решение:
+
+- используйте обновленный `run_snowflake_model_docker.ps1`,
+- передавайте пути в формате `./examples/...`.
+
+### `NameError: np is not defined`
+
+Причина: баг импорта в обертке.
+
+Решение:
+
+- исправлено в текущем `worker.py`,
+- пересоберите образ перед повторным запуском.
 

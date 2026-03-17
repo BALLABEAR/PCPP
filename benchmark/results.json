@@ -1,0 +1,26 @@
+[
+  {
+    "model_id": "snowflake_net",
+    "input_size": "sofa.pcd",
+    "elapsed_seconds": 79.898,
+    "peak_gpu_memory_mb": 1510,
+    "mode": "temporary_local_samples",
+    "run_index": 1
+  },
+  {
+    "model_id": "snowflake_net",
+    "input_size": "input.ply",
+    "elapsed_seconds": 5.768,
+    "peak_gpu_memory_mb": 1481,
+    "mode": "temporary_local_samples",
+    "run_index": 1
+  },
+  {
+    "model_id": "snowflake_net",
+    "input_size": "airplane.pcd",
+    "elapsed_seconds": 5.632,
+    "peak_gpu_memory_mb": 1481,
+    "mode": "temporary_local_samples",
+    "run_index": 1
+  }
+]
