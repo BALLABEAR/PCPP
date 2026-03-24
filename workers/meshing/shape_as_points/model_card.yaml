@@ -1,0 +1,40 @@
+id: shape_as_points_optim
+name: ShapeAsPointsOptim
+task_type: meshing
+description: >
+  PCPP adapter for ShapeAsPoints optimization-based reconstruction.
+  Runs single-object reconstruction via optim.py and returns a reconstructed mesh.
+input_format: [.obj, .ply, .xyz, .txt, .npy]
+output_format: [.ply]
+gpu_required: true
+gpu_memory_mb: 6000
+batching_mode: disabled
+speed: slow
+quality: high
+paper_url: https://arxiv.org/abs/2106.03452
+github_url: https://github.com/autonomousvision/shape_as_points
+params:
+  repo_path:
+    type: str
+    default: external_models/ShapeAsPoints
+    description: local path to ShapeAsPoints repository
+  config:
+    type: str
+    default: configs/optim_based/teaser.yaml
+    description: config path relative to ShapeAsPoints repo
+  total_epochs:
+    type: int
+    default: 200
+    min: 1
+    max: 5000
+    description: number of optimization epochs
+  grid_res:
+    type: int
+    default: 128
+    min: 32
+    max: 512
+    description: poisson grid resolution
+  no_cuda:
+    type: bool
+    default: false
+    description: run on CPU only

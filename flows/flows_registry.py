@@ -1,6 +1,10 @@
 from collections.abc import Callable
 
-from flows.pipeline_flow import stage2_test_flow
+from flows.pipeline_flow import (
+    stage2_test_flow,
+    stage4_real_two_model_flow,
+    stage4_segmentation_completion_flow,
+)
 
 
 def get_registered_flows() -> dict[str, Callable]:
@@ -10,5 +14,7 @@ def get_registered_flows() -> dict[str, Callable]:
     """
     return {
         "stage2_test_flow": stage2_test_flow,
+        "stage4_segmentation_completion_flow": stage4_segmentation_completion_flow,
+        "stage4_real_two_model_flow": stage4_real_two_model_flow,
     }
 

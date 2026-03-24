@@ -1,0 +1,1 @@
+# ShapeAsPoints meshing adapter package.

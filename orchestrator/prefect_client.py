@@ -15,8 +15,15 @@ class PrefectClient:
     def __init__(self, session_factory):
         self.session_factory = session_factory
 
-    def trigger_test_flow(self, task_id: str, input_bucket: str, input_key: str) -> str:
-        flow_run_name = f"stage2-task-{task_id}"
+    def trigger_flow(
+        self,
+        task_id: str,
+        input_bucket: str,
+        input_key: str,
+        flow_id: str = "stage2_test_flow",
+        flow_params: dict | None = None,
+    ) -> str:
+        flow_run_name = f"{flow_id}-task-{task_id}"
         worker_thread = threading.Thread(
             target=self._run_flow_thread,
             kwargs={
@@ -24,6 +31,8 @@ class PrefectClient:
                 "flow_run_name": flow_run_name,
                 "input_bucket": input_bucket,
                 "input_key": input_key,
+                "flow_id": flow_id,
+                "flow_params": flow_params or {},
                 "result_bucket": os.getenv("MINIO_BUCKET_RESULTS", "pcpp-results"),
             },
             daemon=True,
@@ -37,19 +46,25 @@ class PrefectClient:
         flow_run_name: str,
         input_bucket: str,
         input_key: str,
+        flow_id: str,
+        flow_params: dict,
         result_bucket: str,
     ) -> None:
         try:
             from flows.flows_registry import get_registered_flows
 
-            stage2_test_flow = get_registered_flows()["stage2_test_flow"]
+            registered = get_registered_flows()
+            flow_callable = registered.get(flow_id)
+            if flow_callable is None:
+                raise ValueError(f"Unknown flow_id: {flow_id}")
 
             self._update_task(task_id, "running", None, None)
-            result_key = stage2_test_flow.with_options(name=flow_run_name)(
+            result_key = flow_callable.with_options(name=flow_run_name)(
                 task_id=task_id,
                 input_bucket=input_bucket,
                 input_key=input_key,
                 result_bucket=result_bucket,
+                **flow_params,
             )
             self._update_task(task_id, "completed", result_bucket, result_key)
         except Exception as exc:

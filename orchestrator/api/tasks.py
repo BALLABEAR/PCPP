@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,6 +18,10 @@ prefect_client = PrefectClient(SessionLocal)
 class CreateTaskRequest(BaseModel):
     input_bucket: str
     input_key: str
+    flow_id: Literal["stage2_test_flow", "stage4_segmentation_completion_flow", "stage4_real_two_model_flow"] = (
+        "stage2_test_flow"
+    )
+    flow_params: dict[str, Any] | None = None
 
 
 class TaskResponse(BaseModel):
@@ -41,10 +46,12 @@ def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> Ta
     db.commit()
     db.refresh(task)
 
-    flow_run_name = prefect_client.trigger_test_flow(
+    flow_run_name = prefect_client.trigger_flow(
         task_id=task.id,
         input_bucket=task.input_bucket,
         input_key=task.input_key,
+        flow_id=payload.flow_id,
+        flow_params=payload.flow_params,
     )
     task.flow_run_name = flow_run_name
     db.commit()

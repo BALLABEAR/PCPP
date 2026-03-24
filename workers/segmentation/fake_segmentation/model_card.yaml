@@ -1,0 +1,10 @@
+id: fake_segmentation_worker
+name: FakeSegmentationWorker
+task_type: segmentation
+description: >
+  Легкий fake-воркер для Stage 4 DAG.
+  Имитирует шаг сегментации и формирует промежуточный артефакт.
+input_format: [.xyz, .txt, .pts, .ply, .pcd]
+output_format: [.xyz, .txt, .pts, .ply, .pcd]
+gpu_required: false
+batching_mode: disabled

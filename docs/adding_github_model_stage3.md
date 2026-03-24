@@ -255,6 +255,31 @@ CMD ["python", "-m", "workers.<task_type>.<model_name>.worker", "--help"]
 4. Замеры через `benchmark/run_benchmark.py`.
 5. Фиксация результатов в `benchmark/results.md`.
 
+### Benchmark data (одна команда)
+
+Чтобы получить воспроизводимые входы `100K/500K/1M`, выполните:
+
+```bash
+python scripts/prepare_benchmark_data.py
+```
+
+Это создаст локальные папки:
+
+- `data/raw_benchmark/`
+- `data/benchmark_inputs/{100k,500k,1m}/`
+- `data/benchmark_manifests/`
+
+Запуск benchmark на prepared dataset:
+
+```bash
+python benchmark/run_benchmark.py \
+  --model-id snowflake_net \
+  --dataset prepared \
+  --input-size 100k \
+  --repeats 1 \
+  --run-command-template "powershell -ExecutionPolicy Bypass -File ./examples/run_snowflake_model_docker.ps1 -InputPath {input}"
+```
+
 ---
 
 ## Troubleshooting (частые ошибки и решения)

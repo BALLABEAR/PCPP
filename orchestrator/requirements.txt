@@ -8,3 +8,4 @@ python-dotenv==1.0.1
 prefect==2.20.16
 pydantic==2.9.2
 PyYAML==6.0.2
+docker==7.1.0
