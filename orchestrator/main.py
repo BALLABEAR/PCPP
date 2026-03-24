@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from orchestrator.api.files import router as files_router
 from orchestrator.api.pipelines import router as pipelines_router
@@ -18,6 +19,13 @@ logging.basicConfig(
 logger = logging.getLogger("orchestrator")
 
 app = FastAPI(title="PCPP Orchestrator", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(files_router)
 app.include_router(tasks_router)
 app.include_router(registry_router)

@@ -13,9 +13,12 @@ $ErrorActionPreference = "Stop"
 $modelArgs = @("--repo-path", $RepoPath, "--config", $Config, "--total-epochs", "$TotalEpochs", "--grid-res", "$GridRes")
 if ($NoCuda.IsPresent) { $modelArgs += "--no-cuda" }
 
-& powershell -ExecutionPolicy Bypass -File "./examples/run_model_docker.ps1" `
-  -TaskType "meshing" `
-  -ModelId "shape_as_points" `
-  -InputPath $InputPath `
-  -OutputDir $OutputDir `
-  -ModelArgs $modelArgs
+$invokeArgs = @{
+    TaskType = "meshing"
+    ModelId = "shape_as_points"
+    InputPath = $InputPath
+    OutputDir = $OutputDir
+    ModelArgs = $modelArgs
+}
+
+& "./examples/run_model_docker.ps1" @invokeArgs

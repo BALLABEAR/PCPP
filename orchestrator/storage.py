@@ -8,10 +8,10 @@ from botocore.config import Config
 from fastapi import UploadFile
 
 
-def get_s3_client() -> BaseClient:
+def get_s3_client(endpoint_url: str | None = None) -> BaseClient:
     return boto3.client(
         "s3",
-        endpoint_url=os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
+        endpoint_url=endpoint_url or os.getenv("MINIO_ENDPOINT", "http://minio:9000"),
         aws_access_key_id=os.getenv("MINIO_ROOT_USER", "pcpp_minio"),
         aws_secret_access_key=os.getenv("MINIO_ROOT_PASSWORD", "pcpp_minio_secret"),
         config=Config(signature_version="s3v4"),
@@ -30,7 +30,9 @@ def upload_input_file(file: UploadFile) -> tuple[str, str]:
 
 
 def generate_download_url(bucket: str, key: str, expires_seconds: int = 600) -> str:
-    return get_s3_client().generate_presigned_url(
+    # Presigned URL must be signed for the same host the browser will call.
+    public_endpoint = (os.getenv("MINIO_PUBLIC_ENDPOINT") or "http://localhost:9000").strip()
+    return get_s3_client(endpoint_url=public_endpoint).generate_presigned_url(
         "get_object",
         Params={"Bucket": bucket, "Key": key},
         ExpiresIn=expires_seconds,

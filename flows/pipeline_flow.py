@@ -63,6 +63,20 @@ def _docker_image_exists(tag: str) -> bool:
         return False
 
 
+def _ensure_shared_runtime_image(client, docker_build_context: str) -> None:
+    runtime_tag = "pcpp-runtime-cuda118:latest"
+    if _docker_image_exists(runtime_tag):
+        return
+    runtime_dockerfile = "/app/workers/base/runtime/Dockerfile.cuda118"
+    client.images.build(
+        path=docker_build_context,
+        dockerfile=runtime_dockerfile,
+        tag=runtime_tag,
+        rm=True,
+        pull=False,
+    )
+
+
 def _cli_args_from_mapping(cli_args: dict[str, object] | None) -> list[str]:
     if not cli_args:
         return []
@@ -81,6 +95,7 @@ def _cli_args_from_mapping(cli_args: dict[str, object] | None) -> list[str]:
 
 def _run_worker_in_docker(
     *,
+    task_id: str,
     input_path: Path,
     output_dir: Path,
     worker_module: str,
@@ -95,6 +110,7 @@ def _run_worker_in_docker(
     from docker.types import DeviceRequest
 
     client = _docker_client()
+    _ensure_shared_runtime_image(client, docker_build_context)
     if docker_build and not _docker_image_exists(image_tag):
         client.images.build(
             path=docker_build_context,
@@ -124,6 +140,7 @@ def _run_worker_in_docker(
         name=container_name,
         detach=True,
         device_requests=device_requests,
+        labels={"pcpp.task_id": task_id, "pcpp.worker_module": worker_module},
     )
     try:
         in_tar_stream = io.BytesIO()
@@ -320,6 +337,7 @@ def run_worker_step(
             if not dockerfile_path or not image_tag:
                 raise ValueError("dockerfile_path and image_tag are required for execution_mode=docker")
             output_local = _run_worker_in_docker(
+                task_id=task_id,
                 input_path=local_input,
                 output_dir=local_out_dir,
                 worker_module=worker_module,
@@ -398,7 +416,7 @@ def stage4_real_two_model_flow(
                 "worker_class": "ShapeAsPointsOptimWorker",
                 "execution_mode": "docker",
                 "dockerfile_path": "/app/workers/meshing/shape_as_points/Dockerfile",
-                "image_tag": "pcpp-shape-as-points:gpu",
+                "image_tag": "pcpp-meshing-shape_as_points:gpu",
                 "use_gpu": not meshing_no_cuda,
                 "cli_args": {
                     "repo-path": meshing_repo_path,
@@ -469,3 +487,87 @@ def stage4_real_two_model_flow(
 
     logger.info("Stage4 real flow completed for task %s", task_id)
     return final_result_key
+
+
+@flow(name="stage4-snowflake-only-flow", log_prints=True)
+def stage4_snowflake_only_flow(
+    task_id: str,
+    input_bucket: str,
+    input_key: str,
+    result_bucket: str,
+    completion_mode: str = "model",
+    completion_weights_path: str | None = "external_models/SnowflakeNet/pretrained_completion/ckpt-best-c3d-cd_l2.pth",
+    completion_config_path: str | None = "external_models/SnowflakeNet/completion/configs/c3d_cd2.yaml",
+    completion_device: str | None = "cuda",
+) -> str:
+    logger = get_run_logger()
+    logger.info("Stage4 snowflake-only flow started for task %s", task_id)
+    pipeline_steps = [
+        {
+            "name": "01_completion",
+            "worker_module": "workers.completion.snowflake_net.worker",
+            "worker_class": "SnowflakeWorker",
+            "execution_mode": "docker",
+            "dockerfile_path": "/app/workers/completion/snowflake_net/Dockerfile",
+            "image_tag": "pcpp-snowflake:gpu",
+            "use_gpu": completion_device == "cuda",
+            "cli_args": {
+                "mode": completion_mode,
+                "weights": completion_weights_path,
+                "config": completion_config_path,
+                "device": completion_device,
+            },
+        }
+    ]
+    return stage4_real_two_model_flow(
+        task_id=task_id,
+        input_bucket=input_bucket,
+        input_key=input_key,
+        result_bucket=result_bucket,
+        completion_mode=completion_mode,
+        completion_weights_path=completion_weights_path,
+        completion_config_path=completion_config_path,
+        completion_device=completion_device,
+        pipeline_steps=pipeline_steps,
+    )
+
+
+@flow(name="stage4-shape-as-points-only-flow", log_prints=True)
+def stage4_shape_as_points_only_flow(
+    task_id: str,
+    input_bucket: str,
+    input_key: str,
+    result_bucket: str,
+    meshing_repo_path: str = "external_models/ShapeAsPoints",
+    meshing_config_path: str = "configs/optim_based/teaser.yaml",
+    meshing_total_epochs: int = 200,
+    meshing_grid_res: int = 128,
+    meshing_no_cuda: bool = False,
+) -> str:
+    logger = get_run_logger()
+    logger.info("Stage4 shape-as-points-only flow started for task %s", task_id)
+    pipeline_steps = [
+        {
+            "name": "01_meshing",
+            "worker_module": "workers.meshing.shape_as_points.worker",
+            "worker_class": "ShapeAsPointsOptimWorker",
+            "execution_mode": "docker",
+            "dockerfile_path": "/app/workers/meshing/shape_as_points/Dockerfile",
+            "image_tag": "pcpp-meshing-shape_as_points:gpu",
+            "use_gpu": not meshing_no_cuda,
+            "cli_args": {
+                "repo-path": meshing_repo_path,
+                "config": meshing_config_path,
+                "total-epochs": meshing_total_epochs,
+                "grid-res": meshing_grid_res,
+                "no-cuda": meshing_no_cuda,
+            },
+        }
+    ]
+    return stage4_real_two_model_flow(
+        task_id=task_id,
+        input_bucket=input_bucket,
+        input_key=input_key,
+        result_bucket=result_bucket,
+        pipeline_steps=pipeline_steps,
+    )

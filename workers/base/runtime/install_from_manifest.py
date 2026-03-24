@@ -2,12 +2,33 @@ import argparse
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 def _run(command: str) -> None:
-    print(f"[runtime-manifest] {command}")
-    subprocess.run(command, shell=True, check=True)
+    retries = int(os.getenv("RUNTIME_CMD_RETRIES", "3"))
+    retry_delay = int(os.getenv("RUNTIME_CMD_RETRY_DELAY_SEC", "10"))
+    last_error: subprocess.CalledProcessError | None = None
+
+    for attempt in range(1, retries + 1):
+        print(f"[runtime-manifest] (attempt {attempt}/{retries}) {command}")
+        try:
+            subprocess.run(command, shell=True, check=True)
+            return
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            if attempt < retries:
+                print(
+                    f"[runtime-manifest] command failed (exit={exc.returncode}); "
+                    f"retrying in {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+            else:
+                break
+
+    assert last_error is not None
+    raise last_error
 
 
 def _load_manifest(path: Path) -> dict:

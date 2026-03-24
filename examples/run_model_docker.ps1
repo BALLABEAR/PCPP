@@ -15,8 +15,19 @@ if (!(Test-Path $OutputDir)) { New-Item -Path $OutputDir -ItemType Directory | O
 $dockerfilePath = "workers/$TaskType/$ModelId/Dockerfile"
 if (!(Test-Path $dockerfilePath)) { throw "Dockerfile not found: $dockerfilePath" }
 
+# Build shared CUDA runtime once; model images inherit from it.
+$runtimeImage = "pcpp-runtime-cuda118:latest"
+$runtimeDockerfile = "workers/base/runtime/Dockerfile.cuda118"
+$runtimeId = (docker images -q $runtimeImage 2>$null)
+if ([string]::IsNullOrWhiteSpace($runtimeId)) {
+    if (!(Test-Path $runtimeDockerfile)) { throw "Runtime Dockerfile not found: $runtimeDockerfile" }
+    Write-Host "Building shared runtime image: $runtimeImage"
+    docker build -t $runtimeImage -f $runtimeDockerfile .
+    if ($LASTEXITCODE -ne 0) { throw "Runtime image build failed with exit code $LASTEXITCODE" }
+}
+
 if ([string]::IsNullOrWhiteSpace($ImageTag)) {
-    $ImageTag = "pcpp-$TaskType-$ModelId:gpu"
+    $ImageTag = "pcpp-$TaskType-${ModelId}:gpu"
 }
 
 $projectRoot = Resolve-Path "."

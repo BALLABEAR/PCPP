@@ -19,18 +19,18 @@ docker compose up -d --build
 pip install -r tests/requirements.txt
 ```
 
-### 3) Запустите fake-модель как обычный скрипт
+### 3) Запустите fake-модель через универсальный docker-run
 
 Windows (PowerShell):
 
 ```powershell
-./examples/run_fake_model.ps1
+./examples/run_model_docker.ps1 -TaskType testing -ModelId sleep_worker -InputPath ./examples/sample_input.txt -OutputDir ./examples/model_outputs
 ```
 
 Linux/macOS:
 
 ```bash
-bash ./examples/run_fake_model.sh
+bash ./examples/run_model_docker.sh testing sleep_worker ./examples/sample_input.txt ./examples/model_outputs
 ```
 
 ### 4) Проверьте, что создан выходной файл
@@ -107,10 +107,10 @@ git clone https://github.com/AllenXiangX/SnowflakeNet external_models/SnowflakeN
 - `examples/model_inputs/` — входные тестовые облака (например `sofa.pcd`, `input.ply`, `airplane.pcd`)
 - `examples/model_outputs/` — результаты запуска
 
-Готовые скрипты:
+Рекомендуемый запуск:
 
-- Windows: `./examples/run_snowflake_model.ps1`
-- Linux/macOS: `bash ./examples/run_snowflake_model.sh`
+- Windows: `./examples/run_snowflake_model_docker.ps1`
+- Linux/macOS: `bash ./examples/run_snowflake_model_docker.sh`
 
 Текущий Snowflake wrapper уже умеет читать `.pcd`, `.ply`, `.xyz`, `.txt`, `.npy`.
 

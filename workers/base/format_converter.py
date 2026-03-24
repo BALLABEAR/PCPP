@@ -1,0 +1,70 @@
+from pathlib import Path
+from typing import TypeAlias
+
+from workers.base.point_cloud_io import load_points, save_points
+
+
+SupportedCloudFile: TypeAlias = Path
+
+
+class FormatConverter:
+    """
+    Converts various point-cloud inputs to supported worker-friendly files.
+    Phase 1 supported input formats:
+      .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz
+    """
+
+    def normalize(self, input_path: Path, work_dir: Path) -> SupportedCloudFile:
+        suffix = input_path.suffix.lower()
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        if suffix in {".ply", ".xyz", ".txt", ".pts", ".npy"}:
+            # Already supported by internal parser.
+            points = load_points(input_path)
+            if not points:
+                raise ValueError(f"Input file contains no valid XYZ points: {input_path}")
+            normalized = work_dir / f"{input_path.stem}_normalized{suffix}"
+            save_points(normalized, points)
+            return normalized
+
+        if suffix in {".pcd"}:
+            points = self._load_via_open3d(input_path)
+            normalized = work_dir / f"{input_path.stem}_normalized.ply"
+            save_points(normalized, points)
+            return normalized
+
+        if suffix in {".las", ".laz"}:
+            points = self._load_via_laspy(input_path)
+            normalized = work_dir / f"{input_path.stem}_normalized.ply"
+            save_points(normalized, points)
+            return normalized
+
+        raise ValueError(
+            f"Unsupported input format: {suffix}. Supported: .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz"
+        )
+
+    def _load_via_open3d(self, input_path: Path) -> list[tuple[float, float, float]]:
+        try:
+            import open3d as o3d
+        except Exception as exc:
+            raise RuntimeError(
+                "PCD conversion requires open3d. Install with: pip install open3d"
+            ) from exc
+        cloud = o3d.io.read_point_cloud(str(input_path))
+        points = [(float(p[0]), float(p[1]), float(p[2])) for p in cloud.points]
+        if not points:
+            raise ValueError(f"Failed to read points from PCD: {input_path}")
+        return points
+
+    def _load_via_laspy(self, input_path: Path) -> list[tuple[float, float, float]]:
+        try:
+            import laspy
+        except Exception as exc:
+            raise RuntimeError(
+                "LAS/LAZ conversion requires laspy. Install with: pip install laspy"
+            ) from exc
+        las = laspy.read(str(input_path))
+        points = [(float(x), float(y), float(z)) for x, y, z in zip(las.x, las.y, las.z)]
+        if not points:
+            raise ValueError(f"Failed to read points from LAS/LAZ: {input_path}")
+        return points

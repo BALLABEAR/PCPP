@@ -24,6 +24,15 @@ mkdir -p "${OUTPUT_DIR}"
 DOCKERFILE_PATH="workers/${TASK_TYPE}/${MODEL_ID}/Dockerfile"
 [[ -f "${DOCKERFILE_PATH}" ]] || { echo "Dockerfile not found: ${DOCKERFILE_PATH}"; exit 1; }
 
+# Build shared CUDA runtime once; model images inherit from it.
+RUNTIME_IMAGE="pcpp-runtime-cuda118:latest"
+RUNTIME_DOCKERFILE="workers/base/runtime/Dockerfile.cuda118"
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+  [[ -f "${RUNTIME_DOCKERFILE}" ]] || { echo "Runtime Dockerfile not found: ${RUNTIME_DOCKERFILE}"; exit 1; }
+  echo "Building shared runtime image: ${RUNTIME_IMAGE}"
+  docker build -t "${RUNTIME_IMAGE}" -f "${RUNTIME_DOCKERFILE}" .
+fi
+
 if [[ -z "${IMAGE_TAG}" ]]; then
   IMAGE_TAG="pcpp-${TASK_TYPE}-${MODEL_ID}:gpu"
 fi

@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 
+import docker
 from sqlalchemy.orm import Session
 
 from orchestrator.models.task import Task
@@ -39,6 +40,23 @@ class PrefectClient:
         )
         worker_thread.start()
         return flow_run_name
+
+    def cancel_task(self, task_id: str) -> None:
+        self._update_task(task_id, "cancelled", None, None, "Cancelled by user request")
+        # Stop worker containers created by this task.
+        try:
+            client = docker.from_env()
+            containers = client.containers.list(
+                all=True,
+                filters={"label": [f"pcpp.task_id={task_id}"]},
+            )
+            for container in containers:
+                try:
+                    container.remove(force=True)
+                except Exception:
+                    logger.exception("Failed to remove worker container %s for task %s", container.name, task_id)
+        except Exception:
+            logger.exception("Failed to cancel docker workers for task %s", task_id)
 
     def _run_flow_thread(
         self,
@@ -83,6 +101,8 @@ class PrefectClient:
         try:
             task = db.get(Task, task_id)
             if not task:
+                return
+            if task.status == "cancelled" and status in {"running", "completed", "failed"}:
                 return
             task.status = status
             task.result_bucket = result_bucket

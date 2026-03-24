@@ -4,6 +4,8 @@ from flows.pipeline_flow import (
     stage2_test_flow,
     stage4_real_two_model_flow,
     stage4_segmentation_completion_flow,
+    stage4_shape_as_points_only_flow,
+    stage4_snowflake_only_flow,
 )
 
 
@@ -16,5 +18,7 @@ def get_registered_flows() -> dict[str, Callable]:
         "stage2_test_flow": stage2_test_flow,
         "stage4_segmentation_completion_flow": stage4_segmentation_completion_flow,
         "stage4_real_two_model_flow": stage4_real_two_model_flow,
+        "stage4_snowflake_only_flow": stage4_snowflake_only_flow,
+        "stage4_shape_as_points_only_flow": stage4_shape_as_points_only_flow,
     }
 

@@ -18,7 +18,13 @@ prefect_client = PrefectClient(SessionLocal)
 class CreateTaskRequest(BaseModel):
     input_bucket: str
     input_key: str
-    flow_id: Literal["stage2_test_flow", "stage4_segmentation_completion_flow", "stage4_real_two_model_flow"] = (
+    flow_id: Literal[
+        "stage2_test_flow",
+        "stage4_segmentation_completion_flow",
+        "stage4_real_two_model_flow",
+        "stage4_snowflake_only_flow",
+        "stage4_shape_as_points_only_flow",
+    ] = (
         "stage2_test_flow"
     )
     flow_params: dict[str, Any] | None = None
@@ -66,5 +72,17 @@ def get_task(task_id: str, db: Session = Depends(get_db)) -> TaskResponse:
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    return TaskResponse.model_validate(task, from_attributes=True)
+
+
+@router.post("/{task_id}/cancel", response_model=TaskResponse)
+def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskResponse:
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status not in {"pending", "running"}:
+        raise HTTPException(status_code=409, detail=f"Task is already in terminal state: {task.status}")
+    prefect_client.cancel_task(task_id)
+    db.refresh(task)
     return TaskResponse.model_validate(task, from_attributes=True)
 

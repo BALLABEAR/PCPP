@@ -1,6 +1,7 @@
 import logging
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import RedirectResponse
 
 from orchestrator.storage import generate_download_url, upload_input_file
 
@@ -23,10 +24,13 @@ def get_download_url(
     bucket: str = Query(..., description="S3 bucket name"),
     key: str = Query(..., description="S3 object key"),
     expires_seconds: int = Query(600, ge=60, le=3600),
-) -> dict[str, str]:
+    redirect: bool = Query(False, description="If true, return HTTP redirect to file URL"),
+):
     try:
         url = generate_download_url(bucket=bucket, key=key, expires_seconds=expires_seconds)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Cannot generate download URL: {exc}") from exc
+    if redirect:
+        return RedirectResponse(url=url, status_code=307)
     return {"bucket": bucket, "key": key, "url": url}
 

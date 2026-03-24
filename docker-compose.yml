@@ -103,6 +103,7 @@ services:
       PREFECT_API_URL: http://prefect_server:4200/api
       WORKSPACE_ROOT: /app
       MINIO_ENDPOINT: http://minio:9000
+      MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET_FILES: ${MINIO_BUCKET_FILES}
@@ -120,6 +121,19 @@ services:
       minio_init:
         condition: service_completed_successfully
       prefect_server:
+        condition: service_started
+
+  # ── Frontend (Этап 6) ───────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: pcpp_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      orchestrator:
         condition: service_started
 
 volumes:

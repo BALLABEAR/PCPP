@@ -44,6 +44,12 @@ pytest tests/test_stage3_worker_scaffold.py -v
 
 # Запустить интеграционный тест этапа 4 (DAG segmentation -> completion)
 pytest tests/test_stage4_flow.py -v
+
+# Запустить unit-тесты этапа 5 (robust BaseWorker)
+pytest tests/test_stage5_base_worker.py -v
+
+# Запустить тесты этапа 6 (frontend + pipeline templates API)
+pytest tests/test_stage6_frontend.py -v
 ```
 
 Все тесты должны быть зелёными.
@@ -57,6 +63,7 @@ pytest tests/test_stage4_flow.py -v
 | Redis      | localhost:6379         | —                               |
 | FastAPI    | http://localhost:8000  | —                               |
 | Prefect UI | http://localhost:4200  | —                               |
+| Frontend   | http://localhost:3000  | —                               |
 
 ### Остановка
 
@@ -82,7 +89,9 @@ pcpp/
 │   ├── test_infrastructure.py      # тесты этапа 1
 │   ├── test_stage2_flow.py         # интеграционный тест этапа 2
 │   ├── test_stage3_worker_scaffold.py # проверка onboarding scaffolds этапа 3
-│   └── test_stage4_flow.py         # интеграционный тест DAG этапа 4
+│   ├── test_stage4_flow.py         # интеграционный тест DAG этапа 4
+│   ├── test_stage5_base_worker.py  # unit-тесты BaseWorker stage 5
+│   └── test_stage6_frontend.py     # smoke + API тесты frontend stage 6
 ├── orchestrator/
 │   ├── main.py                     # точка входа FastAPI + подключение роутеров
 │   ├── api/
@@ -100,6 +109,12 @@ pcpp/
 ├── flows/
 │   ├── pipeline_flow.py            # тестовый flow (MinIO -> sleep 5s -> MinIO)
 │   └── flows_registry.py           # реестр flow для orchestrator
+├── frontend/
+│   ├── Dockerfile
+│   └── src/
+│       ├── index.html
+│       ├── app.js
+│       └── styles.css
 ├── workers/testing/sleep_worker/
 │   ├── worker.py                   # fake-модель для onboarding
 │   ├── model_card.yaml
@@ -123,16 +138,10 @@ pcpp/
 │   ├── adding_github_model_stage3.md
 │   └── universal_model_runtime.md   # docker-only универсальный runtime для любых моделей
 ├── examples/
-│   ├── run_fake_model.ps1          # быстрый запуск fake-модели (Windows)
-│   ├── run_fake_model.sh           # быстрый запуск fake-модели (Linux/macOS)
-│   ├── run_fake_segmentation_model.ps1 # запуск fake segmentation (Windows)
-│   ├── run_fake_segmentation_model.sh  # запуск fake segmentation (Linux/macOS)
 │   ├── run_model_docker.ps1        # универсальный docker-run для любой модели (Windows)
 │   ├── run_model_docker.sh         # универсальный docker-run для любой модели (Linux/macOS)
 │   ├── run_shape_as_points_docker.ps1 # готовый запуск ShapeAsPoints (Windows)
 │   ├── run_shape_as_points_docker.sh  # готовый запуск ShapeAsPoints (Linux/macOS)
-│   ├── run_snowflake_model.ps1     # запуск Snowflake wrapper (Windows)
-│   ├── run_snowflake_model.sh      # запуск Snowflake wrapper (Linux/macOS)
 │   ├── run_snowflake_model_docker.ps1 # запуск Snowflake через GPU Docker (Windows)
 │   ├── run_snowflake_model_docker.sh  # запуск Snowflake через GPU Docker (Linux/macOS)
 │   ├── model_inputs/               # сюда кладутся пользовательские test-файлы
@@ -159,8 +168,8 @@ pcpp/
 - [x] **Этап 2** — FastAPI + Prefect + тестовый воркер
 - [x] **Этап 3** — Первая нейросеть + бенчмарк
 - [ ] **Этап 4** — Вторая модель + DAG
-- [ ] **Этап 5** — Robustness BaseWorker
-- [ ] **Этап 6** — Frontend
+- [x] **Этап 5** — Robustness BaseWorker
+- [x] **Этап 6** — Frontend
 - [ ] **Этап 7** — Третья модель + валидация + GPU-очереди
 - [ ] **Этап 8** — Observability
 
@@ -225,8 +234,8 @@ python benchmark/run_benchmark.py \
 ## Для пользователей без опыта
 
 - Начните с `docs/adding_github_model_stage3.md` (раздел Quick Start)
-- Запустите fake-модель через `examples/run_fake_model.ps1` или `examples/run_fake_model.sh`
-- Для реального Snowflake запускайте `examples/run_snowflake_model.ps1` (или `.sh`)
+- Для smoke-проверки используйте универсальный запуск:
+  `examples/run_model_docker.ps1 -TaskType testing -ModelId sleep_worker ...`
 - Если локальный Python не собирает CUDA-расширения, используйте Docker-вариант:
   `examples/run_snowflake_model_docker.ps1` (или `.sh`)
 - Проверяйте работоспособность через `tests/test_stage3_worker_scaffold.py`
