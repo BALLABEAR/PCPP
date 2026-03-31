@@ -6,5 +6,8 @@ description: >
   Имитирует шаг сегментации и формирует промежуточный артефакт.
 input_format: [.xyz, .txt, .pts, .ply, .pcd]
 output_format: [.xyz, .txt, .pts, .ply, .pcd]
+accepted_input_formats: [.xyz, .txt, .pts, .ply, .pcd, .npy, .las, .laz]
+produced_output_formats: [.xyz]
+preferred_output_format: .xyz
 gpu_required: false
 batching_mode: disabled

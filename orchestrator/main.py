@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from orchestrator.api.files import router as files_router
+from orchestrator.api.onboarding import router as onboarding_router
 from orchestrator.api.pipelines import router as pipelines_router
 from orchestrator.api.registry import router as registry_router
 from orchestrator.api.tasks import router as tasks_router
@@ -30,6 +31,7 @@ app.include_router(files_router)
 app.include_router(tasks_router)
 app.include_router(registry_router)
 app.include_router(pipelines_router)
+app.include_router(onboarding_router)
 
 
 @app.on_event("startup")

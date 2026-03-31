@@ -63,6 +63,9 @@ description: >
   {description}
 input_format: [{in_fmt}]
 output_format: [{out_fmt}]
+accepted_input_formats: [{in_fmt}]
+produced_output_formats: [{out_fmt}]
+preferred_output_format: {output_formats[0] if output_formats else '.xyz'}
 gpu_required: true
 batching_mode: disabled
 github_url: {repo_path}

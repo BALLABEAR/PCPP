@@ -73,13 +73,26 @@ workers/training/**
 !workers/meshing/
 !workers/meshing/shape_as_points/
 !workers/meshing/shape_as_points/**
+!workers/meshing/cloudcompare/
+!workers/meshing/cloudcompare/**
+!workers/completion/
+!workers/completion/snowflake_net/
+!workers/completion/snowflake_net/**
+!workers/completion/poin_tr/
+!workers/completion/poin_tr/**
 
 # Re-ignore caches inside whitelisted scaffolds
 workers/testing/**/__pycache__/
 workers/base/**/__pycache__/
 workers/segmentation/fake_segmentation/**/__pycache__/
 workers/meshing/shape_as_points/**/__pycache__/
+workers/meshing/cloudcompare/**/__pycache__/
+workers/completion/snowflake_net/**/__pycache__/
+workers/completion/poin_tr/**/__pycache__/
 workers/testing/**/*.py[cod]
 workers/base/**/*.py[cod]
 workers/segmentation/fake_segmentation/**/*.py[cod]
 workers/meshing/shape_as_points/**/*.py[cod]
+workers/meshing/cloudcompare/**/*.py[cod]
+workers/completion/snowflake_net/**/*.py[cod]
+workers/completion/poin_tr/**/*.py[cod]

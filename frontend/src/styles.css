@@ -57,3 +57,21 @@ input, select {
   color: #666;
   font-size: 0.9rem;
 }
+
+.top-menu {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.menu-button {
+  background: #f0f0f0;
+  color: #111;
+  border: 1px solid #ccc;
+}
+
+.menu-button.active {
+  background: #111;
+  color: #fff;
+  border-color: #111;
+}

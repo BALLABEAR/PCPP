@@ -21,6 +21,9 @@ def list_models(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
             meta = {
                 "input_format": payload.get("input_format"),
                 "output_format": payload.get("output_format"),
+                "accepted_input_formats": payload.get("accepted_input_formats"),
+                "produced_output_formats": payload.get("produced_output_formats"),
+                "preferred_output_format": payload.get("preferred_output_format"),
                 "gpu_required": payload.get("gpu_required"),
                 "gpu_memory_mb": payload.get("gpu_memory_mb"),
                 "speed": payload.get("speed"),

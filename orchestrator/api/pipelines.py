@@ -4,61 +4,9 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_db
 from orchestrator.models.pipeline import Pipeline
+from flows.flow_definitions import get_pipeline_templates
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
-
-PIPELINE_TEMPLATES: list[dict] = [
-    {
-        "id": "stage2_test",
-        "name": "Stage 2 Test Flow",
-        "flow_id": "stage2_test_flow",
-        "description": "MinIO -> fake worker -> MinIO result",
-        "flow_params": {},
-    },
-    {
-        "id": "stage4_real_two_model",
-        "name": "Stage 4 Real (Completion -> Meshing)",
-        "flow_id": "stage4_real_two_model_flow",
-        "description": "SnowflakeNet completion + ShapeAsPoints meshing",
-        "flow_params": {
-            "completion_mode": "model",
-            "completion_weights_path": "external_models/SnowflakeNet/pretrained_completion/ckpt-best-c3d-cd_l2.pth",
-            "completion_config_path": "external_models/SnowflakeNet/completion/configs/c3d_cd2.yaml",
-            "completion_device": "cuda",
-            "meshing_repo_path": "external_models/ShapeAsPoints",
-            "meshing_config_path": "configs/optim_based/teaser.yaml",
-            "meshing_total_epochs": 200,
-            "meshing_grid_res": 128,
-            "meshing_no_cuda": False,
-        },
-    },
-    {
-        "id": "stage4_snowflake_only",
-        "name": "Stage 4 Snowflake Only",
-        "flow_id": "stage4_snowflake_only_flow",
-        "description": "Single-step completion flow with SnowflakeNet only",
-        "flow_params": {
-            "completion_mode": "model",
-            "completion_weights_path": "external_models/SnowflakeNet/pretrained_completion/ckpt-best-c3d-cd_l2.pth",
-            "completion_config_path": "external_models/SnowflakeNet/completion/configs/c3d_cd2.yaml",
-            "completion_device": "cuda",
-        },
-    },
-    {
-        "id": "stage4_shape_as_points_only",
-        "name": "Stage 4 ShapeAsPoints Only",
-        "flow_id": "stage4_shape_as_points_only_flow",
-        "description": "Single-step meshing flow with ShapeAsPoints only",
-        "flow_params": {
-            "meshing_repo_path": "external_models/ShapeAsPoints",
-            "meshing_config_path": "configs/optim_based/teaser.yaml",
-            "meshing_total_epochs": 20,
-            "meshing_grid_res": 64,
-            "meshing_no_cuda": False,
-        },
-    },
-]
-
 
 class PipelineResponse(BaseModel):
     id: str
@@ -73,7 +21,7 @@ class CreatePipelineRequest(BaseModel):
 
 @router.get("/templates")
 def list_pipeline_templates() -> list[dict]:
-    return PIPELINE_TEMPLATES
+    return get_pipeline_templates()
 
 
 @router.get("", response_model=list[PipelineResponse])

@@ -14,6 +14,35 @@ class FormatConverter:
       .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz
     """
 
+    def supported_formats(self) -> set[str]:
+        return {".ply", ".xyz", ".txt", ".pts", ".npy", ".pcd", ".las", ".laz"}
+
+    def can_convert_format(self, source_suffix: str, target_suffix: str) -> bool:
+        source = source_suffix.lower().strip()
+        target = target_suffix.lower().strip()
+        if not source.startswith("."):
+            source = f".{source}"
+        if not target.startswith("."):
+            target = f".{target}"
+        if source not in self.supported_formats() or target not in self.supported_formats():
+            return False
+        # All supported point-cloud formats can be loaded then re-saved to a target format.
+        return True
+
+    def convert(self, input_path: Path, target_suffix: str, work_dir: Path) -> SupportedCloudFile:
+        target = target_suffix.lower().strip()
+        if not target.startswith("."):
+            target = f".{target}"
+        if target not in self.supported_formats():
+            raise ValueError(f"Unsupported target format: {target}")
+        normalized = self.normalize(input_path, work_dir)
+        if normalized.suffix.lower() == target:
+            return normalized
+        points = load_points(normalized)
+        converted = work_dir / f"{input_path.stem}_converted{target}"
+        save_points(converted, points)
+        return converted
+
     def normalize(self, input_path: Path, work_dir: Path) -> SupportedCloudFile:
         suffix = input_path.suffix.lower()
         work_dir.mkdir(parents=True, exist_ok=True)

@@ -1,24 +1,14 @@
 from collections.abc import Callable
 
-from flows.pipeline_flow import (
-    stage2_test_flow,
-    stage4_real_two_model_flow,
-    stage4_segmentation_completion_flow,
-    stage4_shape_as_points_only_flow,
-    stage4_snowflake_only_flow,
-)
+from flows.flow_definitions import FLOW_DEFINITIONS, get_flow_callable
 
 
 def get_registered_flows() -> dict[str, Callable]:
-    """
-    Централизованный реестр flow-функций для orchestrator.
-    В этапе 2 регистрируется только тестовый flow.
-    """
-    return {
-        "stage2_test_flow": stage2_test_flow,
-        "stage4_segmentation_completion_flow": stage4_segmentation_completion_flow,
-        "stage4_real_two_model_flow": stage4_real_two_model_flow,
-        "stage4_snowflake_only_flow": stage4_snowflake_only_flow,
-        "stage4_shape_as_points_only_flow": stage4_shape_as_points_only_flow,
-    }
+    registered: dict[str, Callable] = {}
+    for definition in FLOW_DEFINITIONS:
+        flow_callable = get_flow_callable(definition.flow_id)
+        if flow_callable is None:
+            continue
+        registered[definition.flow_id] = flow_callable
+    return registered
 

@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import shlex
 
 
 def _run(command: str) -> None:
@@ -63,7 +64,8 @@ def _run_python_phase(manifest: dict) -> None:
     pip_packages = python_section.get("pip") or []
     pip_extra_args = " ".join(python_section.get("pip_extra_args") or [])
     if pip_packages:
-        joined = " ".join(pip_packages)
+        # Shell-escape package specs like numpy<2, torch==2.1.2+cu118, etc.
+        joined = " ".join(shlex.quote(str(item)) for item in pip_packages)
         command = f"python -m pip install --no-cache-dir {pip_extra_args} {joined}".strip()
         _run(command)
 

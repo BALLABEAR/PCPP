@@ -1,4 +1,0 @@
-numpy>=1.26,<2
-PyYAML>=6.0
-torch>=2.1
-open3d>=0.18

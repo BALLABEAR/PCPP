@@ -6,6 +6,9 @@ description: >
   Runs single-object reconstruction via optim.py and returns a reconstructed mesh.
 input_format: [.obj, .ply, .xyz, .txt, .npy]
 output_format: [.ply]
+accepted_input_formats: [.ply, .xyz, .txt, .npy, .pts, .pcd, .las, .laz]
+produced_output_formats: [.ply]
+preferred_output_format: .ply
 gpu_required: true
 gpu_memory_mb: 6000
 batching_mode: disabled

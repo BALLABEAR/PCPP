@@ -1,14 +1,16 @@
 import logging
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_db
+from orchestrator.flow_validation import validate_flow_formats
 from orchestrator.models import SessionLocal
 from orchestrator.models.task import Task
 from orchestrator.prefect_client import PrefectClient
+from flows.flow_definitions import get_flow_definition
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("orchestrator.tasks")
@@ -18,15 +20,8 @@ prefect_client = PrefectClient(SessionLocal)
 class CreateTaskRequest(BaseModel):
     input_bucket: str
     input_key: str
-    flow_id: Literal[
-        "stage2_test_flow",
-        "stage4_segmentation_completion_flow",
-        "stage4_real_two_model_flow",
-        "stage4_snowflake_only_flow",
-        "stage4_shape_as_points_only_flow",
-    ] = (
-        "stage2_test_flow"
-    )
+    input_keys: list[str] | None = None
+    flow_id: str = "stage2_test_flow"
     flow_params: dict[str, Any] | None = None
 
 
@@ -39,10 +34,27 @@ class TaskResponse(BaseModel):
     result_key: str | None
     flow_run_name: str | None
     error_message: str | None
+    created_at: Any | None = None
+    updated_at: Any | None = None
 
 
 @router.post("", response_model=TaskResponse)
 def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> TaskResponse:
+    if payload.input_keys is not None and len(payload.input_keys) == 0:
+        raise HTTPException(status_code=422, detail="input_keys cannot be empty")
+    if not get_flow_definition(payload.flow_id):
+        raise HTTPException(status_code=422, detail=f"Unknown flow_id: {payload.flow_id}")
+
+    try:
+        validate_flow_formats(
+            flow_id=payload.flow_id,
+            flow_params=payload.flow_params,
+            input_key=payload.input_key,
+            input_keys=payload.input_keys,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     task = Task(
         status="pending",
         input_bucket=payload.input_bucket,
@@ -52,12 +64,18 @@ def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> Ta
     db.commit()
     db.refresh(task)
 
+    flow_params = dict(payload.flow_params or {})
+    if payload.input_keys:
+        flow_params["input_keys"] = payload.input_keys
+    if task.created_at:
+        flow_params["task_created_at_utc"] = task.created_at.isoformat()
+
     flow_run_name = prefect_client.trigger_flow(
         task_id=task.id,
         input_bucket=task.input_bucket,
         input_key=task.input_key,
         flow_id=payload.flow_id,
-        flow_params=payload.flow_params,
+        flow_params=flow_params,
     )
     task.flow_run_name = flow_run_name
     db.commit()

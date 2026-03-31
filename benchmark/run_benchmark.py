@@ -66,6 +66,7 @@ def run_dag_inference(
 
     e2e_elapsed = time.perf_counter() - started
     step_metrics = []
+    metrics_payload: dict = {}
     metrics_key = f"results/{task_id}/pipeline_metrics.json"
 
     try:
@@ -82,12 +83,14 @@ def run_dag_inference(
         step_metrics = metrics_payload.get("steps", [])
     except Exception:
         step_metrics = []
+        metrics_payload = {}
 
     return {
         "task_id": task_id,
         "elapsed_seconds": round(e2e_elapsed, 3),
         "task_payload": task_payload,
         "step_metrics": step_metrics,
+        "pipeline_metrics": metrics_payload,
     }
 
 
@@ -225,10 +228,15 @@ def main() -> None:
                     )
                     elapsed = dag_run["elapsed_seconds"]
                     step_metrics = dag_run["step_metrics"]
+                    pipeline_metrics = dag_run.get("pipeline_metrics") or {}
                     step_gpu = [item.get("gpu_memory_mb") for item in step_metrics if item.get("gpu_memory_mb") is not None]
                     peak_gpu_mb = max(step_gpu) if step_gpu else get_gpu_memory_mb()
                     dag_task_id = dag_run["task_id"]
                     task_result_key = dag_run["task_payload"].get("result_key")
+                    queue_delay = pipeline_metrics.get("queue_delay_seconds")
+                    build_total = pipeline_metrics.get("image_build_total_seconds")
+                    throughput = pipeline_metrics.get("throughput_files_per_second")
+                    files_total = pipeline_metrics.get("files_total")
                 else:
                     command = args.run_command_template.format(input=str(input_file).replace("\\", "/"))
                     elapsed = run_inference(command)
@@ -236,6 +244,10 @@ def main() -> None:
                     step_metrics = []
                     dag_task_id = None
                     task_result_key = None
+                    queue_delay = None
+                    build_total = None
+                    throughput = None
+                    files_total = None
 
                 results.append(
                     {
@@ -250,6 +262,10 @@ def main() -> None:
                         "task_id": dag_task_id,
                         "task_result_key": task_result_key,
                         "step_metrics": step_metrics,
+                        "queue_delay_seconds": queue_delay,
+                        "image_build_total_seconds": build_total,
+                        "throughput_files_per_second": throughput,
+                        "files_total": files_total,
                         "metadata": metadata,
                     }
                 )
