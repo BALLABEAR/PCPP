@@ -2,6 +2,7 @@ import argparse
 import shlex
 import subprocess
 import os
+import json
 from pathlib import Path
 
 
@@ -14,6 +15,11 @@ def _write_if_missing(path: Path, content: str) -> None:
 
 def _worker_template(task_type: str, model_id: str, repo_path: str, entry_command: str, weights_path: str, config_path: str) -> str:
     class_name = "".join(part.capitalize() for part in model_id.split("_")) + "Worker"
+    model_id_literal = json.dumps(model_id)
+    repo_path_literal = json.dumps(repo_path)
+    entry_command_literal = json.dumps(entry_command)
+    weights_path_literal = json.dumps(weights_path)
+    config_path_literal = json.dumps(config_path)
     return f"""import argparse
 import os
 import shlex
@@ -28,11 +34,11 @@ class {class_name}(BaseWorker):
     \"\"\"Auto-generated adapter with fail-fast entry command.\"\"\"
 
     def __init__(self) -> None:
-        super().__init__(model_id="{model_id}")
-        self.repo_path = "{repo_path}"
-        self.entry_command = "{entry_command}"
-        self.weights_path = "{weights_path}"
-        self.config_path = "{config_path}"
+        super().__init__(model_id={model_id_literal})
+        self.repo_path = {repo_path_literal}
+        self.entry_command = {entry_command_literal}
+        self.weights_path = {weights_path_literal}
+        self.config_path = {config_path_literal}
         self.cli_overrides: dict[str, str] = {{}}
 
     def process(self, input_path: Path, output_dir: Path) -> Path:

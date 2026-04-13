@@ -43,6 +43,30 @@ class FormatConverter:
         save_points(converted, points)
         return converted
 
+    def convert_model_output_to_point_cloud(self, output_path: Path, work_dir: Path, target_suffix: str = ".ply") -> SupportedCloudFile:
+        target = target_suffix.lower().strip()
+        if not target.startswith("."):
+            target = f".{target}"
+        if target not in self.supported_formats():
+            raise ValueError(f"Unsupported target format: {target}")
+        source = output_path.suffix.lower().strip()
+        if source == target:
+            return output_path
+        if source != ".npy":
+            return output_path
+        work_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            points = load_points(output_path)
+        except ValueError as exc:
+            raise ValueError(
+                "Model produced .npy output with invalid point shape; expected Nx3 or Nx>=3 values."
+            ) from exc
+        if not points:
+            raise ValueError("Model produced .npy output without any valid XYZ points.")
+        converted = work_dir / f"{output_path.stem}{target}"
+        save_points(converted, points)
+        return converted
+
     def normalize(self, input_path: Path, work_dir: Path) -> SupportedCloudFile:
         suffix = input_path.suffix.lower()
         work_dir.mkdir(parents=True, exist_ok=True)

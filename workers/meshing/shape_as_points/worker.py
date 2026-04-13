@@ -1,144 +1,146 @@
 import argparse
+import os
+import shlex
+import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 from workers.base.base_worker import BaseWorker
 
 
-class ShapeAsPointsOptimWorker(BaseWorker):
-    """
-    Adapter for ShapeAsPoints optimization-based reconstruction.
-    Input: .obj (preferred), .ply, .xyz, .txt, .npy.
-    Non-mesh inputs are converted to .ply with estimated normals.
-    Output: reconstructed .ply mesh.
-    """
+class ShapeAsPointsWorker(BaseWorker):
+    """Auto-generated adapter with fail-fast entry command."""
 
-    def __init__(
-        self,
-        repo_path: str = "external_models/ShapeAsPoints",
-        config_path: str = "configs/optim_based/teaser.yaml",
-        total_epochs: int = 200,
-        grid_res: int = 128,
-        no_cuda: bool = False,
-    ) -> None:
-        super().__init__(model_id="shape_as_points_optim")
-        self.repo_path = Path(repo_path)
-        self.config_path = config_path
-        self.total_epochs = total_epochs
-        self.grid_res = grid_res
-        self.no_cuda = no_cuda
+    def __init__(self) -> None:
+        super().__init__(model_id="shape_as_points")
+        self.repo_path = "./external_models/ShapeAsPoints"
+        self.entry_command = "python -c \"import pathlib,glob,shutil,subprocess; import open3d as o3d; from workers.base.format_converter import FormatConverter; mode=str('{mode}' or '').strip().lower(); presets={'fast':(120,96),'hq':(300,128),'max':(900,256)}; epochs,grid=presets.get(mode,presets['hq']); run_dir=pathlib.Path('{output_dir}')/'sap_run'; run_dir.mkdir(parents=True,exist_ok=True); conv=FormatConverter(); inp_norm=conv.normalize(pathlib.Path('{input}'), pathlib.Path('{output_dir}')/'_norm_input'); pcd=o3d.io.read_point_cloud(str(inp_norm)); pcd.estimate_normals(); pcd.orient_normals_consistent_tangent_plane(50); inp_with_norm=pathlib.Path('{output_dir}')/'_input_with_normals.ply'; o3d.io.write_point_cloud(str(inp_with_norm), pcd); cmd=['python','optim.py','{config_path}','--data:data_path',str(inp_with_norm),'--train:out_dir',str(run_dir),'--train:total_epochs',str(epochs),'--model:grid_res',str(grid),'--train:o3d_show','False','--data:object_id','-1','--train:n_workers','0']; subprocess.run(cmd,cwd='{repo_path}',check=True); meshes=sorted(glob.glob(str(run_dir/'vis'/'mesh'/'*.ply'))); shutil.copy(meshes[-1], str(pathlib.Path('{output_dir}')/'shape_as_points_mesh.ply'))\""
+        self.weights_path = "./external_models/ShapeAsPoints/configs/optim_based/teaser.yaml"
+        self.config_path = "./external_models/ShapeAsPoints/configs/optim_based/teaser.yaml"
+        self.cli_overrides: dict[str, str] = {}
 
     def process(self, input_path: Path, output_dir: Path) -> Path:
-        suffix = input_path.suffix.lower()
-        if suffix not in {".obj", ".ply", ".xyz", ".txt", ".npy"}:
-            raise ValueError("ShapeAsPoints optimization mode supports .obj/.ply/.xyz/.txt/.npy inputs")
-
-        repo = self.repo_path.resolve()
-        if not repo.exists():
-            raise FileNotFoundError(f"ShapeAsPoints repo not found: {repo}")
-
-        config = (repo / self.config_path).resolve()
-        if not config.exists():
-            raise FileNotFoundError(f"ShapeAsPoints config not found: {config}")
-
-        run_dir = (output_dir / f"{input_path.stem}_sap_run").resolve()
-        run_dir.mkdir(parents=True, exist_ok=True)
-
-        prepared_input = self._prepare_input_for_optim(input_path=input_path, output_dir=output_dir)
-
-        command = [
-            sys.executable,
-            "optim.py",
-            str(config),
-            "--data:data_path",
-            str(prepared_input.resolve()),
-            "--data:object_id",
-            "-1",
-            "--train:out_dir",
-            str(run_dir),
-            "--train:total_epochs",
-            str(self.total_epochs),
-            "--model:grid_res",
-            str(self.grid_res),
-            "--train:o3d_show",
-            "False",
-        ]
-        if self.no_cuda:
-            command.append("--no_cuda")
-
-        subprocess.run(command, cwd=str(repo), check=True)
-
-        mesh_dir = run_dir / "vis" / "mesh"
-        mesh_candidates = sorted(mesh_dir.glob("*.ply"))
-        if not mesh_candidates:
-            raise RuntimeError(f"No mesh output found in {mesh_dir}")
-
-        latest_mesh = mesh_candidates[-1]
-        output_path = output_dir / f"{input_path.stem}_sap_mesh.ply"
-        output_path.write_bytes(latest_mesh.read_bytes())
-        return output_path
-
-    def _prepare_input_for_optim(self, input_path: Path, output_dir: Path) -> Path:
-        suffix = input_path.suffix.lower()
-        if suffix in {".obj", ".ply"}:
-            return input_path
-
-        try:
-            import numpy as np
-            import open3d as o3d
-        except Exception as exc:
+        if not self.entry_command.strip():
             raise RuntimeError(
-                "open3d and numpy are required to convert xyz/txt/npy input for ShapeAsPoints"
+                "entry_command is empty in generated adapter. "
+                "Provide entry_command in onboarding Advanced fields."
+            )
+        overrides = self.cli_overrides or {}
+        resolved_repo_path = overrides.get("repo_path") or self.repo_path
+        repo_name = Path(str(resolved_repo_path)).name
+        in_repo = Path("/app/external_models") / repo_name
+        resolved_weights = overrides.get("weights_path") or self.weights_path
+        resolved_config = overrides.get("config_path") or self.config_path
+        resolved_device = overrides.get("device") or "cuda:0"
+        resolved_mode = overrides.get("mode") or "model"
+        def _to_container_path(raw: str) -> str:
+            value = str(raw or "").strip()
+            if not value:
+                return value
+            if value.startswith("/app/"):
+                return value
+            if value.startswith("./"):
+                value = value[2:]
+            if value.startswith("external_models/"):
+                return f"/app/{value}"
+            if value.startswith(repo_name + "/"):
+                return f"/app/external_models/{value}"
+            return value
+        resolved_weights = _to_container_path(resolved_weights)
+        resolved_config = _to_container_path(resolved_config)
+        # Copy input under output_dir and pass a basename-only path for {input}.
+        # Many upstream CLIs join(output_root, stem(input_path)); if input_path is absolute,
+        # os.path.join drops output_root and writes outside output_dir (e.g. PoinTr inference.py).
+        run_cwd = in_repo if in_repo.exists() else output_dir
+        staged_dir = run_cwd / ".pcpp_tmp_inputs"
+        staged_dir.mkdir(parents=True, exist_ok=True)
+        staged = staged_dir / f"_pcpp_input{input_path.suffix}"
+        shutil.copy2(input_path, staged)
+        input_rel = str(staged.relative_to(run_cwd))
+        try:
+            command = self.entry_command.format(
+                input=input_rel,
+                output_dir=str(output_dir),
+                repo_path=str(in_repo),
+                weights_path=resolved_weights,
+                config_path=resolved_config,
+                device=resolved_device,
+                mode=resolved_mode,
+            )
+        except KeyError as exc:
+            raise RuntimeError(
+                f"Unsupported placeholder in entry_command: {exc}. "
+                "Allowed placeholders: {input}, {output_dir}, {repo_path}, "
+                "{weights_path}, {config_path}, {device}, {mode}."
             ) from exc
+        result = subprocess.run(
+            shlex.split(command),
+            cwd=str(run_cwd),
+            env=self._runtime_env(in_repo),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"entry_command failed (exit={result.returncode})\n"
+                f"CMD: {command}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+        produced = [p for p in output_dir.rglob("*") if p.is_file()]
+        if not produced:
+            raise RuntimeError(
+                "entry_command completed but no files were produced in output_dir. "
+                "Use {output_dir} placeholder in entry_command."
+            )
+        return max(produced, key=lambda p: p.stat().st_mtime)
 
-        if suffix == ".npy":
-            points = np.load(str(input_path))
-        else:
-            points = np.loadtxt(str(input_path), dtype=np.float32)
-        if points.ndim == 1:
-            points = points.reshape(-1, 3)
-        if points.shape[1] > 3:
-            points = points[:, :3]
-        if points.shape[1] != 3:
-            raise ValueError(f"Expected XYZ points with 3 columns, got shape={points.shape}")
-
-        cloud = o3d.geometry.PointCloud()
-        cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
-        cloud.estimate_normals()
-        cloud.orient_normals_consistent_tangent_plane(30)
-
-        converted = output_dir / f"{input_path.stem}_with_normals.ply"
-        o3d.io.write_point_cloud(str(converted), cloud)
-        return converted
+    def _runtime_env(self, in_repo: Path) -> dict[str, str]:
+        env = dict(os.environ)
+        py_path_parts: list[str] = []
+        current = env.get("PYTHONPATH", "")
+        if current:
+            py_path_parts.extend([p for p in current.split(":") if p])
+        py_path_parts.append("/app")
+        ext_root = in_repo / "extensions"
+        if ext_root.exists() and ext_root.is_dir():
+            for child in ext_root.iterdir():
+                if child.is_dir():
+                    py_path_parts.append(str(child))
+        # Preserve order and remove duplicates.
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for item in py_path_parts:
+            if item not in seen:
+                seen.add(item)
+                normalized.append(item)
+        env["PYTHONPATH"] = ":".join(normalized)
+        return env
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PCPP ShapeAsPoints optimization adapter")
-    parser.add_argument("--input", required=True, help="Input .obj/.ply/.xyz/.txt/.npy path")
+    parser = argparse.ArgumentParser(description="PCPP generated worker template")
+    parser.add_argument("--input", required=True, help="Input file path")
     parser.add_argument("--output-dir", required=True, help="Output directory")
-    parser.add_argument(
-        "--repo-path",
-        default="external_models/ShapeAsPoints",
-        help="Path to ShapeAsPoints repository",
-    )
-    parser.add_argument(
-        "--config",
-        default="configs/optim_based/teaser.yaml",
-        help="Relative config path inside ShapeAsPoints repo",
-    )
-    parser.add_argument("--total-epochs", type=int, default=200, help="Optimization iterations")
-    parser.add_argument("--grid-res", type=int, default=128, help="Poisson grid resolution")
-    parser.add_argument("--no-cuda", action="store_true", default=False, help="Run on CPU")
-    args = parser.parse_args()
+    parser.add_argument("--repo-path", "--repo_path", dest="repo_path", default="", help="Optional repo override")
+    parser.add_argument("--weights", "--weights-path", "--weights_path", dest="weights_path", default="", help="Optional weights override")
+    parser.add_argument("--config", "--config-path", "--config_path", dest="config_path", default="", help="Optional config override")
+    parser.add_argument("--device", default="", help="Optional device override")
+    parser.add_argument("--mode", default="", help="Optional mode override")
+    args, unknown = parser.parse_known_args()
 
-    worker = ShapeAsPointsOptimWorker(
-        repo_path=args.repo_path,
-        config_path=args.config,
-        total_epochs=args.total_epochs,
-        grid_res=args.grid_res,
-        no_cuda=args.no_cuda,
-    )
+    worker = ShapeAsPointsWorker()
+    if unknown:
+        raise RuntimeError(
+            f"Unknown worker arguments: {unknown}. "
+            "Use supported overrides: --repo-path --weights-path/--weights --config-path/--config --device --mode."
+        )
+    overrides = {
+        "repo_path": args.repo_path,
+        "weights_path": args.weights_path,
+        "config_path": args.config_path,
+        "device": args.device,
+        "mode": args.mode,
+    }
+    worker.cli_overrides = overrides
     result = worker.run(input_path=args.input, output_dir=args.output_dir)
     print(result)
 

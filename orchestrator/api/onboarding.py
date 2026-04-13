@@ -482,6 +482,11 @@ def _patch_runtime_manifest(
             data["python"]["pip_commands"].append(
                 "python -m pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorch.org/whl/cu118"
             )
+            # Torch wheels in this stack are built against NumPy 1.x ABI.
+            # Pin numpy<2 to avoid runtime import failures like "Numpy is not available".
+            existing_pip = [str(pkg) for pkg in data["python"].get("pip", [])]
+            data["python"]["pip"] = [pkg for pkg in existing_pip if _pkg_name(pkg) != "numpy"]
+            data["python"]["pip"].append("numpy<2")
         for pkg in cleaned:
             if pkg in torch_related:
                 continue

@@ -1,1 +1,1 @@
-# ShapeAsPoints meshing adapter package.
+# Generated model adapter package.

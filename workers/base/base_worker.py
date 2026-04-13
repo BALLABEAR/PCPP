@@ -70,6 +70,7 @@ class BaseWorker:
                 output_path = self.process(normalized, target_dir)
             else:
                 raise
+        output_path = self._normalize_point_cloud_output(Path(output_path), target_dir)
         logger.info("Worker %s finished. output=%s", self.model_id, output_path)
         return str(output_path)
 
@@ -163,6 +164,28 @@ class BaseWorker:
         merged_output = target_dir / f"{input_path.stem}_{self.model_id}_merged{merged_suffix}"
         self._batch_processor.merge_outputs(batch_outputs, merged_output)
         return merged_output
+
+    def _normalize_point_cloud_output(self, output_path: Path, target_dir: Path) -> Path:
+        if output_path.suffix.lower() != ".npy":
+            return output_path
+        converted = self._converter.convert_model_output_to_point_cloud(
+            output_path=output_path,
+            work_dir=target_dir / "_normalized_output",
+            target_suffix=".ply",
+        )
+        # Keep only point-cloud artifact to avoid downstream pick-up of stale .npy files.
+        if Path(converted) != output_path and output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+        logger.info(
+            "Worker %s converted model output %s -> %s",
+            self.model_id,
+            output_path.suffix.lower(),
+            Path(converted).suffix.lower(),
+        )
+        return Path(converted)
 
 
 def _load_yaml_like(path: Path) -> dict[str, Any]:
