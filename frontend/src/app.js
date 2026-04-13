@@ -9,6 +9,7 @@ function App() {
   const [templateId, setTemplateId] = useState("");
   const [task, setTask] = useState(null);
   const [status, setStatus] = useState(null);
+  const [taskLogs, setTaskLogs] = useState("");
   const [models, setModels] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -52,6 +53,13 @@ function App() {
   const rollbackDoneRef = useRef(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [activeView, setActiveView] = useState("pipeline");
+  const [pipelineDraft, setPipelineDraft] = useState({
+    name: "",
+    steps: [{ model_id: "", paramsText: "" }],
+  });
+  const [pipelineValidation, setPipelineValidation] = useState(null);
+  const [pipelineMessage, setPipelineMessage] = useState("");
+  const [forceRebuildImage, setForceRebuildImage] = useState(false);
 
   function parseListField(value) {
     return (value || "")
@@ -83,9 +91,27 @@ function App() {
       .then((r) => r.json())
       .then((payload) => {
         const safePayload = Array.isArray(payload) ? payload : [];
+        // #region agent log
+        debugLog(
+          "H1",
+          "templates loaded",
+          {
+            total: safePayload.length,
+            systemCount: safePayload.filter((x) => x.source === "system").length,
+            userCount: safePayload.filter((x) => x.source === "user").length,
+            pointrNames: safePayload
+              .filter((x) => String(x.name || "").toLowerCase().includes("pointr"))
+              .map((x) => ({ id: x.id, name: x.name, source: x.source, flow_id: x.flow_id })),
+          },
+          "pipeline-view",
+        );
+        // #endregion
         setTemplates(safePayload);
-        if (safePayload.length > 0) {
-          setTemplateId(safePayload[0].id);
+        const safeUsers = safePayload.filter((item) => item.source === "user");
+        if (safeUsers.length > 0) {
+          setTemplateId(safeUsers[0].id);
+        } else {
+          setTemplateId("");
         }
       })
       .catch((e) => setError(`Failed to load templates: ${e.message}`));
@@ -102,6 +128,11 @@ function App() {
       const resp = await fetch(`${API_BASE}/tasks/${task.id}`);
       const payload = await resp.json();
       setStatus(payload);
+      const logsResp = await fetch(`${API_BASE}/tasks/${task.id}/logs`);
+      if (logsResp.ok) {
+        const logsPayload = await logsResp.json();
+        setTaskLogs(logsPayload.logs || "");
+      }
       if (payload.status === "completed" || payload.status === "failed" || payload.status === "cancelled") {
         clearInterval(timer);
       }
@@ -109,9 +140,30 @@ function App() {
     return () => clearInterval(timer);
   }, [task?.id]);
 
+  const userTemplates = useMemo(
+    () => templates.filter((item) => item.source === "user"),
+    [templates],
+  );
   const selectedTemplate = useMemo(
-    () => templates.find((item) => item.id === templateId) || null,
-    [templates, templateId],
+    () => userTemplates.find((item) => item.id === templateId) || null,
+    [userTemplates, templateId],
+  );
+  const modelOptions = useMemo(
+    () => models
+      .filter((m) => m.ready !== false)
+      .map((m) => ({ id: m.id, label: `${m.name} (${m.task_type})` })),
+    [models],
+  );
+  const unavailableModels = useMemo(
+    () => models.filter((m) => m.ready === false),
+    [models],
+  );
+  const modelById = useMemo(
+    () => models.reduce((acc, item) => {
+      acc[item.id] = item;
+      return acc;
+    }, {}),
+    [models],
   );
 
   useEffect(() => {
@@ -244,6 +296,7 @@ function App() {
     setIsSubmitting(true);
     setTask(null);
     setStatus(null);
+    setTaskLogs("");
     try {
       const form = new FormData();
       form.append("file", file);
@@ -254,6 +307,13 @@ function App() {
       if (!uploadResp.ok) throw new Error(await uploadResp.text());
       const upload = await uploadResp.json();
 
+      const flowParams = { ...(selectedTemplate.flow_params || {}) };
+      if (forceRebuildImage && Array.isArray(flowParams.pipeline_steps)) {
+        flowParams.pipeline_steps = flowParams.pipeline_steps.map((step) => ({
+          ...step,
+          docker_force_rebuild: true,
+        }));
+      }
       const createResp = await fetch(`${API_BASE}/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -261,7 +321,7 @@ function App() {
           input_bucket: upload.bucket,
           input_key: upload.key,
           flow_id: selectedTemplate.flow_id,
-          flow_params: selectedTemplate.flow_params || {},
+          flow_params: flowParams,
         }),
       });
       if (!createResp.ok) throw new Error(await createResp.text());
@@ -285,6 +345,194 @@ function App() {
       setStatus(payload);
     } catch (e) {
       setError(`Cancel failed: ${e.message}`);
+    }
+  }
+
+  function updateDraftStep(index, patch) {
+    setPipelineDraft((prev) => ({
+      ...prev,
+      steps: prev.steps.map((step, i) => (i === index ? { ...step, ...patch } : step)),
+    }));
+  }
+
+  function addDraftStep() {
+    setPipelineDraft((prev) => ({ ...prev, steps: [...prev.steps, { model_id: "", paramsText: "" }] }));
+  }
+
+  function removeDraftStep(index) {
+    setPipelineDraft((prev) => {
+      const next = prev.steps.filter((_, i) => i !== index);
+      return { ...prev, steps: next.length ? next : [{ model_id: "", paramsText: "" }] };
+    });
+  }
+
+  function moveDraftStep(index, dir) {
+    setPipelineDraft((prev) => {
+      const target = index + dir;
+      if (target < 0 || target >= prev.steps.length) return prev;
+      const next = [...prev.steps];
+      [next[index], next[target]] = [next[target], next[index]];
+      return { ...prev, steps: next };
+    });
+  }
+
+  function parsePrimitive(value) {
+    const text = String(value || "").trim();
+    const low = text.toLowerCase();
+    if (low === "true") return true;
+    if (low === "false") return false;
+    if (low === "null" || low === "none") return null;
+    if (/^-?\d+$/.test(text)) return Number.parseInt(text, 10);
+    if (/^-?\d+\.\d+$/.test(text)) return Number.parseFloat(text);
+    if (text.startsWith("[") || text.startsWith("{")) {
+      try {
+        return JSON.parse(text);
+      } catch (_) {
+        return text;
+      }
+    }
+    return text;
+  }
+
+  function parseStepParams(text) {
+    const params = {};
+    (text || "").split("\n").forEach((line) => {
+      const raw = line.trim();
+      if (!raw || raw.toLowerCase() === "<empty>") return;
+      const idx = raw.indexOf("=");
+      if (idx <= 0) return;
+      const key = raw.slice(0, idx).trim();
+      if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(key)) return;
+      params[key] = parsePrimitive(raw.slice(idx + 1).trim());
+    });
+    return params;
+  }
+
+  function validateStepParamsAgainstModel(step) {
+    const model = modelById[step.model_id];
+    if (!model?.params) return [];
+    const allowed = new Set(Object.keys(model.params || {}));
+    const parsed = parseStepParams(step.paramsText);
+    const errors = [];
+    Object.keys(parsed).forEach((key) => {
+      if (!allowed.has(key) && !allowed.has(key.replace(/-/g, "_")) && !allowed.has(key.replace(/_/g, "-"))) {
+        errors.push(`Параметр '${key}' не поддерживается моделью '${step.model_id}'.`);
+      }
+    });
+    return errors;
+  }
+
+  async function validatePipelineDraft() {
+    setPipelineMessage("");
+    const localErrors = pipelineDraft.steps.flatMap((step) => validateStepParamsAgainstModel(step));
+    if (localErrors.length > 0) {
+      setPipelineValidation(null);
+      setPipelineMessage(localErrors.join("\n"));
+      return false;
+    }
+    const payload = {
+      name: pipelineDraft.name,
+      steps: pipelineDraft.steps.map((step) => ({ model_id: step.model_id, params: parseStepParams(step.paramsText) })),
+    };
+    const resp = await fetch(`${API_BASE}/pipelines/validate-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setPipelineMessage(`Ошибка проверки: ${JSON.stringify(data)}`);
+      setPipelineValidation(null);
+      return false;
+    }
+    setPipelineValidation(data);
+    if (!data.valid) {
+      setPipelineMessage((data.errors || []).join("\n") || "Draft невалиден");
+      return false;
+    }
+    setPipelineMessage("Draft валиден");
+    return true;
+  }
+
+  async function savePipelineDraft() {
+    const ok = await validatePipelineDraft();
+    if (!ok) return;
+    const payload = {
+      name: pipelineDraft.name,
+      steps: pipelineDraft.steps.map((step) => ({ model_id: step.model_id, params: parseStepParams(step.paramsText) })),
+    };
+    const resp = await fetch(`${API_BASE}/pipelines/create-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setPipelineMessage(`Ошибка сохранения: ${JSON.stringify(data)}`);
+      return;
+    }
+    setPipelineMessage(`Сохранено: ${data.name}`);
+    const tResp = await fetch(`${API_BASE}/pipelines/templates`);
+    const tPayload = await tResp.json();
+    const safe = Array.isArray(tPayload) ? tPayload : [];
+    setTemplates(safe);
+    const created = safe.find((item) => item.source === "user" && item.name === data.name);
+    if (created?.id) setTemplateId(created.id);
+  }
+
+  async function handleDeleteModel(modelId) {
+    if (!window.confirm(`Вы уверены, что хотите удалить модель '${modelId}'?`)) return;
+    setError("");
+    // #region agent log
+    debugLog("H3", "delete model clicked", { modelId }, "delete-model");
+    // #endregion
+    try {
+      const resp = await fetch(`${API_BASE}/registry/models/${encodeURIComponent(modelId)}`, {
+        method: "DELETE",
+      });
+      // #region agent log
+      debugLog(
+        "H3",
+        "delete model response",
+        { modelId, status: resp.status, ok: resp.ok },
+        "delete-model",
+      );
+      // #endregion
+      if (!resp.ok) throw new Error(await resp.text());
+      const deletePayload = await resp.json();
+      // #region agent log
+      debugLog("H4", "delete model payload", { modelId, deletePayload }, "delete-model");
+      // #endregion
+      const modelsResp = await fetch(`${API_BASE}/registry/models`);
+      const modelsPayload = await modelsResp.json();
+      setModels(Array.isArray(modelsPayload) ? modelsPayload : []);
+      const templatesResp = await fetch(`${API_BASE}/pipelines/templates`);
+      const templatesPayload = await templatesResp.json();
+      setTemplates(Array.isArray(templatesPayload) ? templatesPayload : []);
+    } catch (e) {
+      setError(`Delete model failed: ${e.message}`);
+    }
+  }
+
+  async function handleDeleteTemplate(template) {
+    if (!template?.pipeline_id) return;
+    if (!window.confirm(`Вы уверены, что хотите удалить пайплайн '${template.name}'?`)) return;
+    setError("");
+    try {
+      const resp = await fetch(`${API_BASE}/pipelines/${encodeURIComponent(template.pipeline_id)}`, {
+        method: "DELETE",
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      const tResp = await fetch(`${API_BASE}/pipelines/templates`);
+      const tPayload = await tResp.json();
+      const safe = Array.isArray(tPayload) ? tPayload : [];
+      setTemplates(safe);
+      const safeUsers = safe.filter((item) => item.source === "user");
+      if (!safeUsers.find((item) => item.id === templateId)) {
+        setTemplateId(safeUsers[0]?.id || "");
+      }
+    } catch (e) {
+      setError(`Delete pipeline failed: ${e.message}`);
     }
   }
 
@@ -481,9 +729,10 @@ function App() {
       body: JSON.stringify({ model_id: onboarding.model_id }),
     });
     const payload = await resp.json();
-    if (!resp.ok || !payload.registered) {
+    if (!resp.ok || !payload.registered || !payload.ready) {
       updateWizard("registry", "failed");
-      setWizardLogs((prev) => `${prev}\n[registry] Model is not visible in registry yet.\n`);
+      const reason = payload?.reason ? ` (${payload.reason})` : "";
+      setWizardLogs((prev) => `${prev}\n[registry] Model is not ready for pipeline usage${reason}.\n`);
       return false;
     }
     updateWizard("registry", "success");
@@ -592,6 +841,14 @@ function App() {
         },
         "Добавить модель",
       ),
+      React.createElement(
+        "button",
+        {
+          className: activeView === "add-pipeline" ? "menu-button active" : "menu-button",
+          onClick: () => setActiveView("add-pipeline"),
+        },
+        "Добавить пайплайн",
+      ),
     ),
     activeView === "pipeline" && React.createElement("div", { className: "card" },
       React.createElement("h2", null, "Run Pipeline"),
@@ -607,14 +864,28 @@ function App() {
           value: templateId,
           onChange: (e) => setTemplateId(e.target.value),
         },
-        templates.map((t) =>
-          React.createElement("option", { key: t.id, value: t.id }, `${t.name} (${t.flow_id})`),
+        userTemplates.map((t) =>
+          React.createElement(
+            "option",
+            { key: t.id, value: t.id },
+            t.name,
+          ),
         ),
       ),
+      userTemplates.length === 0 && React.createElement("p", { className: "muted" }, "Нет пользовательских шаблонов. Создайте пайплайн во вкладке 'Добавить пайплайн'."),
       React.createElement("p", { className: "muted" }, selectedTemplate?.description || ""),
+      React.createElement("label", null,
+        React.createElement("input", {
+          type: "checkbox",
+          checked: forceRebuildImage,
+          onChange: (e) => setForceRebuildImage(e.target.checked),
+          style: { marginRight: 8 },
+        }),
+        "Force rebuild image (для диагностики, может быть медленно)",
+      ),
       React.createElement(
         "button",
-        { disabled: !file || !selectedTemplate || isSubmitting, onClick: handleRun },
+        { disabled: !file || !selectedTemplate || isSubmitting || userTemplates.length === 0, onClick: handleRun },
         isSubmitting ? "Submitting..." : "Upload and Run",
       ),
       status && (status.status === "running" || status.status === "pending") && React.createElement(
@@ -623,12 +894,32 @@ function App() {
         "Cancel Task",
       ),
       status && React.createElement("p", { style: { marginTop: 12 } }, `Status: ${status.status}`),
+      status && React.createElement("pre", { className: "muted", style: { maxHeight: 220, overflow: "auto", background: "#fafafa", padding: 8, borderRadius: 6 } }, taskLogs || "Task logs will appear here"),
       resultLink && React.createElement(
         "p",
         null,
         React.createElement("a", { href: resultLink, target: "_blank", rel: "noreferrer" }, "Download result"),
       ),
       error && React.createElement("p", { style: { color: "crimson" } }, error),
+    ),
+    activeView === "pipeline" && React.createElement("div", { className: "card" },
+      React.createElement("h2", null, "User Pipeline Templates"),
+      userTemplates.length === 0 && React.createElement("p", { className: "muted" }, "Пользовательских пайплайнов пока нет."),
+      userTemplates.map((tpl) =>
+        React.createElement(
+          "div",
+          {
+            key: `user-template-${tpl.id}`,
+            style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+          },
+          React.createElement("span", null, tpl.name),
+          React.createElement(
+            "button",
+            { type: "button", onClick: () => handleDeleteTemplate(tpl), title: "Удалить пайплайн" },
+            "×",
+          ),
+        ),
+      ),
     ),
     activeView === "pipeline" && React.createElement("div", { className: "card" },
       React.createElement("h2", null, "Model Catalog"),
@@ -639,9 +930,17 @@ function App() {
           React.createElement(
             "div",
             { className: "card", key: m.id },
-            React.createElement("strong", null, m.name),
-            React.createElement("p", { className: "muted" }, `${m.task_type} / ${m.id}`),
-            React.createElement("p", null, m.description || "No description"),
+            React.createElement(
+              "div",
+              { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+              React.createElement("strong", null, m.name),
+              React.createElement(
+                "button",
+                { type: "button", onClick: () => handleDeleteModel(m.id), title: "Удалить модель" },
+                "×",
+              ),
+            ),
+            React.createElement("p", { className: "muted" }, m.task_type),
           ),
         ),
       ),
@@ -895,6 +1194,60 @@ function App() {
       ),
       wizardHint && React.createElement("p", { style: { color: "darkorange", marginTop: 12 } }, `${wizardHint.title}: ${wizardHint.fix}`),
       React.createElement("pre", { className: "muted", style: { maxHeight: 220, overflow: "auto", background: "#fafafa", padding: 8, borderRadius: 6 } }, wizardLogs || "Logs will appear here"),
+    ),
+    activeView === "add-pipeline" && React.createElement("div", { className: "card" },
+      React.createElement("h2", null, "Добавить пайплайн"),
+      React.createElement("label", null, "Pipeline name"),
+      React.createElement("input", {
+        value: pipelineDraft.name,
+        onChange: (e) => setPipelineDraft((prev) => ({ ...prev, name: e.target.value })),
+      }),
+      pipelineDraft.steps.map((step, idx) => React.createElement("div", { className: "card", key: `draft-step-${idx}` },
+        React.createElement("label", null, `Шаг ${idx + 1}: модель`),
+        React.createElement(
+          "select",
+          {
+            value: step.model_id,
+            onChange: (e) => updateDraftStep(idx, { model_id: e.target.value }),
+          },
+          React.createElement("option", { value: "" }, "Выберите модель"),
+          modelOptions.map((item) => React.createElement("option", { key: item.id, value: item.id }, item.label)),
+        ),
+        React.createElement("label", null, "Свои веса/конфиг для этого шага (KEY=VALUE, по одному на строку)"),
+        React.createElement(
+          "p",
+          { className: "muted" },
+          "Пример: вставьте свои пути к weights/config. Это переопределит значения модели только в этом шаге пайплайна.",
+        ),
+        step.model_id && modelById[step.model_id]?.params && React.createElement(
+          "p",
+          { className: "muted" },
+          `Поддерживаемые параметры модели: ${Object.keys(modelById[step.model_id].params || {}).join(", ")}`,
+        ),
+        React.createElement("textarea", {
+          value: step.paramsText,
+          onChange: (e) => updateDraftStep(idx, { paramsText: e.target.value }),
+          rows: 5,
+          placeholder: "weights_path=external_models/PoinTr/pretrained/AdaPoinTr_PCN.pth\nconfig_path=external_models/PoinTr/cfgs/PCN_models/AdaPoinTr.yaml\ndevice=cuda:0\nmode=model",
+          style: { width: "100%", marginBottom: 8 },
+        }),
+        React.createElement("button", { type: "button", onClick: () => moveDraftStep(idx, -1), disabled: idx === 0 }, "Вверх"),
+        React.createElement("button", { type: "button", style: { marginLeft: 8 }, onClick: () => moveDraftStep(idx, 1), disabled: idx === pipelineDraft.steps.length - 1 }, "Вниз"),
+        React.createElement("button", { type: "button", style: { marginLeft: 8 }, onClick: () => removeDraftStep(idx), disabled: pipelineDraft.steps.length <= 1 }, "Удалить шаг"),
+      )),
+      unavailableModels.length > 0 && React.createElement(
+        "p",
+        { className: "muted" },
+        `Недоступны для пайплайна (нет build/smoke readiness): ${unavailableModels.map((m) => `${m.id}:${m.readiness_reason || "unknown"}`).join(", ")}`,
+      ),
+      React.createElement("button", { type: "button", onClick: addDraftStep }, "+ Добавить шаг"),
+      React.createElement("button", { type: "button", style: { marginLeft: 8 }, onClick: validatePipelineDraft }, "Проверить пайплайн"),
+      React.createElement("button", { type: "button", style: { marginLeft: 8 }, onClick: savePipelineDraft }, "Сохранить пайплайн"),
+      pipelineMessage && React.createElement("pre", { className: "muted", style: { maxHeight: 180, overflow: "auto", background: "#fafafa", padding: 8, borderRadius: 6 } }, pipelineMessage),
+      pipelineValidation && React.createElement("div", { className: "card", style: { marginTop: 12, background: "#fafafa" } },
+        React.createElement("p", { className: "muted" }, `valid: ${pipelineValidation.valid}`),
+        React.createElement("pre", { className: "muted", style: { maxHeight: 240, overflow: "auto" } }, JSON.stringify(pipelineValidation.normalized_steps || [], null, 2)),
+      ),
     ),
   );
 }

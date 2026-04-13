@@ -126,7 +126,6 @@ def build_stage4_cloudcompare_only_steps(params: dict[str, Any]) -> list[dict[st
 
 def build_stage4_pointr_only_steps(params: dict[str, Any]) -> list[dict[str, Any]]:
     pointr_mode = _value(params, "pointr_mode", "model")
-    pointr_repo_path = _value(params, "pointr_repo_path", "external_models/PoinTr")
     pointr_config_path = _value(params, "pointr_config_path", "cfgs/PCN_models/PoinTr.yaml")
     pointr_weights_path = params.get("pointr_weights_path")
     pointr_device = _value(params, "pointr_device", "cuda:0")
@@ -141,9 +140,8 @@ def build_stage4_pointr_only_steps(params: dict[str, Any]) -> list[dict[str, Any
             "use_gpu": not str(pointr_device).startswith("cpu"),
             "cli_args": {
                 "mode": pointr_mode,
-                "repo-path": pointr_repo_path,
-                "config": pointr_config_path,
-                "weights": pointr_weights_path,
+                "config_path": pointr_config_path,
+                "weights_path": pointr_weights_path,
                 "device": pointr_device,
             },
         }
@@ -250,7 +248,6 @@ FLOW_DEFINITIONS: list[FlowDefinition] = [
             "description": "Single-step completion flow with PoinTr",
             "flow_params": {
                 "pointr_mode": "model",
-                "pointr_repo_path": "external_models/PoinTr",
                 "pointr_config_path": "cfgs/PCN_models/AdaPoinTr.yaml",
                 "pointr_weights_path": "external_models/PoinTr/pretrained/AdaPoinTr_PCN.pth",
                 "pointr_device": "cuda:0",
@@ -268,7 +265,6 @@ FLOW_DEFINITIONS: list[FlowDefinition] = [
             "description": "Single-step completion flow with PoinTr",
             "flow_params": {
                 "pointr_mode": "model",
-                "pointr_repo_path": "external_models/PoinTr",
                 "pointr_config_path": "cfgs/PCN_models/PoinTr.yaml",
                 "pointr_weights_path": "external_models/PoinTr/pretrained/PCNnew.pth",
                 "pointr_device": "cuda:0",

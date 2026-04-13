@@ -26,6 +26,9 @@ def test_stage6_frontend_files_exist() -> None:
         assert file_path.exists(), f"Missing frontend file: {file_path}"
     app_js = Path("frontend/src/app.js").read_text(encoding="utf-8")
     assert "Сформировать запрос для AI-помощника" in app_js
+    assert "Добавить пайплайн" in app_js
+    assert "Force rebuild image" in app_js
+    assert "User Pipeline Templates" in app_js
 
 
 def test_stage6_pipeline_templates_endpoint() -> None:

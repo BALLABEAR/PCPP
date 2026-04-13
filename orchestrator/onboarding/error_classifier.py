@@ -41,6 +41,15 @@ ERROR_HINTS: list[ErrorHint] = [
         fix="Зафиксируйте numpy<2 в runtime.manifest.yaml и пересоберите образ без кэша.",
     ),
     ErrorHint(
+        title="Не хватает системных библиотек OpenCV",
+        pattern=r"(libgthread-2\.0\.so\.0|import cv2|No module named 'cv2')",
+        fix=(
+            "Добавьте системные пакеты для OpenCV в runtime.manifest.yaml: "
+            "libglib2.0-0, libgl1, libsm6, libxext6, libxrender1; "
+            "убедитесь, что opencv-python установлен в pip и пересоберите образ."
+        ),
+    ),
+    ErrorHint(
         title="Docker daemon недоступен",
         pattern=r"(failed to connect to the docker API|dockerDesktopLinuxEngine|No such file or directory: 'docker')",
         fix="Проверьте, что Docker Desktop запущен и Linux engine активен.",

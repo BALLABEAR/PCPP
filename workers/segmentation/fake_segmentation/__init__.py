@@ -1,1 +1,0 @@
-# Fake segmentation worker package.

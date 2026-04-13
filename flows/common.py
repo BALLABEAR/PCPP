@@ -2,6 +2,7 @@ import importlib
 import io
 import json
 import os
+import hashlib
 import tarfile
 import tempfile
 import time
@@ -61,6 +62,10 @@ def docker_client():
     return docker.from_env()
 
 
+def repo_root_path() -> str:
+    return os.getenv("WORKSPACE_ROOT", "/app")
+
+
 def docker_image_exists(tag: str) -> bool:
     client = docker_client()
     try:
@@ -70,11 +75,43 @@ def docker_image_exists(tag: str) -> bool:
         return False
 
 
+def _debug_log(hypothesis_id: str, message: str, data: dict[str, Any] | None = None, run_id: str = "flow-common") -> None:
+    # #region agent log
+    payload = {
+        "sessionId": "e69ff4",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": "flows/common.py",
+        "message": message,
+        "data": data or {},
+        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
+    }
+    try:
+        with Path("debug-e69ff4.log").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
+
+
+def _append_task_log(task_id: str, message: str) -> None:
+    try:
+        from orchestrator.prefect_client import append_task_log
+
+        append_task_log(task_id, message)
+    except Exception:
+        # Keep flow execution resilient even if log plumbing fails.
+        pass
+
+
 def ensure_shared_runtime_image(client, docker_build_context: str) -> None:
     runtime_tag = "pcpp-runtime-cuda118:latest"
+    _debug_log("H8", "ensure_shared_runtime_image enter", {"runtime_tag": runtime_tag, "context": docker_build_context})
     if docker_image_exists(runtime_tag):
+        _debug_log("H8", "shared runtime already exists", {"runtime_tag": runtime_tag})
         return
-    runtime_dockerfile = "/app/workers/base/runtime/Dockerfile.cuda118"
+    runtime_dockerfile = str(Path(repo_root_path()) / "workers" / "base" / "runtime" / "Dockerfile.cuda118")
+    started = time.perf_counter()
     client.images.build(
         path=docker_build_context,
         dockerfile=runtime_dockerfile,
@@ -82,6 +119,7 @@ def ensure_shared_runtime_image(client, docker_build_context: str) -> None:
         rm=True,
         pull=False,
     )
+    _debug_log("H8", "shared runtime built", {"runtime_tag": runtime_tag, "seconds": round(time.perf_counter() - started, 3)})
 
 
 def cli_args_from_mapping(cli_args: dict[str, object] | None) -> list[str]:
@@ -100,6 +138,43 @@ def cli_args_from_mapping(cli_args: dict[str, object] | None) -> list[str]:
     return args
 
 
+def _manifest_hash_for_step(step: dict[str, Any]) -> str | None:
+    model_id = step.get("model_id")
+    task_type = step.get("task_type")
+    if not model_id or not task_type:
+        return None
+    manifest_path = Path(repo_root_path()) / "workers" / str(task_type) / str(model_id) / "runtime.manifest.yaml"
+    if not manifest_path.exists():
+        return None
+    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+
+def _freshness_force_rebuild(step: dict[str, Any]) -> bool:
+    model_id = step.get("model_id")
+    if not model_id:
+        return False
+    try:
+        from orchestrator.models import SessionLocal
+        from orchestrator.models.model_runtime_status import ModelRuntimeStatus
+    except Exception:
+        return False
+    current_hash = _manifest_hash_for_step(step)
+    db = SessionLocal()
+    try:
+        status = db.get(ModelRuntimeStatus, str(model_id))
+    finally:
+        db.close()
+    if not status:
+        return False
+    if status.manifest_hash and current_hash and status.manifest_hash != current_hash:
+        _append_task_log(
+            str(step.get("task_id", "unknown")),
+            f"[docker] manifest hash changed for model {model_id}; forcing image rebuild",
+        )
+        return True
+    return False
+
+
 def run_worker_in_docker(
     *,
     task_id: str,
@@ -110,26 +185,58 @@ def run_worker_in_docker(
     image_tag: str,
     cli_args: dict[str, object] | None,
     docker_build: bool = True,
-    docker_build_context: str = "/app",
+    docker_force_rebuild: bool = False,
+    docker_build_context: str | None = None,
     use_gpu: bool = True,
 ) -> tuple[Path, dict[str, Any]]:
     from docker.types import DeviceRequest
 
     client = docker_client()
-    ensure_shared_runtime_image(client, docker_build_context)
+    resolved_context = docker_build_context or repo_root_path()
+    dockerfile_for_build = dockerfile_path
+    dockerfile_path_obj = Path(dockerfile_path)
+    context_obj = Path(resolved_context)
+    if dockerfile_path_obj.is_absolute() and context_obj in dockerfile_path_obj.parents:
+        dockerfile_for_build = dockerfile_path_obj.relative_to(context_obj).as_posix()
+    _debug_log("H7", "run_worker_in_docker enter", {"task_id": task_id, "image_tag": image_tag, "docker_build": docker_build}, run_id=task_id)
+    _append_task_log(task_id, f"[docker] Preparing image '{image_tag}'")
+    ensure_shared_runtime_image(client, resolved_context)
+    _debug_log("H7", "shared runtime check done", {"task_id": task_id, "image_tag": image_tag}, run_id=task_id)
 
     image_cache_hit = docker_image_exists(image_tag)
     image_build_seconds = 0.0
-    if docker_build and not image_cache_hit:
+    built_now = False
+    if docker_build and (docker_force_rebuild or not image_cache_hit):
+        _append_task_log(task_id, f"[docker] Building image '{image_tag}' (cache_hit_before={image_cache_hit})")
         build_started = time.perf_counter()
         client.images.build(
-            path=docker_build_context,
-            dockerfile=dockerfile_path,
+            path=resolved_context,
+            dockerfile=dockerfile_for_build,
             tag=image_tag,
             rm=True,
             pull=False,
         )
         image_build_seconds = time.perf_counter() - build_started
+        built_now = True
+        _append_task_log(task_id, f"[docker] Build finished in {round(image_build_seconds, 2)}s")
+    else:
+        _append_task_log(
+            task_id,
+            f"[docker] Reusing image '{image_tag}' (cache_hit={image_cache_hit}, force_rebuild={docker_force_rebuild})",
+        )
+    _debug_log(
+        "H7",
+        "docker build decision",
+        {
+            "task_id": task_id,
+            "image_tag": image_tag,
+            "docker_build": docker_build,
+            "image_cache_hit_before": image_cache_hit,
+            "built_now": built_now,
+            "image_build_seconds": round(image_build_seconds, 3),
+        },
+        run_id=task_id,
+    )
 
     container_name = f"pcpp-step-{uuid.uuid4().hex[:12]}"
     in_container_input = f"/tmp/{input_path.name}"
@@ -154,6 +261,7 @@ def run_worker_in_docker(
         labels={"pcpp.task_id": task_id, "pcpp.worker_module": worker_module},
     )
     try:
+        _append_task_log(task_id, f"[docker] Starting worker container '{worker_module}'")
         in_tar_stream = io.BytesIO()
         with tarfile.open(fileobj=in_tar_stream, mode="w") as tar:
             data = input_path.read_bytes()
@@ -168,6 +276,7 @@ def run_worker_in_docker(
         status_code = int(status.get("StatusCode", 1))
         if status_code != 0:
             logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="ignore")
+            _append_task_log(task_id, f"[docker] Worker failed with exit={status_code}")
             raise RuntimeError(f"Worker container exited with code {status_code}. Logs:\n{logs}")
 
         stream, _ = container.get_archive(in_container_output_dir)
@@ -184,6 +293,7 @@ def run_worker_in_docker(
         latest = max(produced_files, key=lambda p: p.stat().st_mtime)
         final_output = output_dir / latest.name
         final_output.write_bytes(latest.read_bytes())
+        _append_task_log(task_id, f"[docker] Worker output ready: {final_output.name}")
         return final_output, {
             "image_cache_hit": image_cache_hit,
             "image_build_seconds": round(image_build_seconds, 3),
@@ -234,7 +344,8 @@ def run_worker_step(
     image_tag: str | None = None,
     cli_args: dict | None = None,
     docker_build: bool = True,
-    docker_build_context: str = "/app",
+    docker_force_rebuild: bool = False,
+    docker_build_context: str | None = None,
     use_gpu: bool = True,
 ) -> dict:
     logger = get_run_logger()
@@ -252,6 +363,7 @@ def run_worker_step(
         local_out_dir = Path(tmp_dir) / "worker_out"
 
         logger.info("Step %s: downloading s3://%s/%s", step_name, input_bucket, input_key)
+        _append_task_log(task_id, f"[step:{step_name}] downloading input {input_key}")
         s3.download_file(input_bucket, input_key, str(local_input))
 
         started = time.perf_counter()
@@ -267,6 +379,7 @@ def run_worker_step(
                 image_tag=image_tag,
                 cli_args=cli_args,
                 docker_build=docker_build,
+                docker_force_rebuild=docker_force_rebuild,
                 docker_build_context=docker_build_context,
                 use_gpu=use_gpu,
             )
@@ -283,6 +396,7 @@ def run_worker_step(
         output_suffix = output_local.suffix or ".bin"
         step_key = f"{output_prefix}/{step_name}{output_suffix}"
         logger.info("Step %s: uploading s3://%s/%s", step_name, result_bucket, step_key)
+        _append_task_log(task_id, f"[step:{step_name}] uploading output {step_key}")
         s3.upload_file(str(output_local), result_bucket, step_key)
 
     return {
@@ -322,6 +436,7 @@ def execute_pipeline(
 
     is_batch_mode = len(run_inputs) > 1
     for idx, current_input_key in enumerate(run_inputs, start=1):
+        _append_task_log(task_id, f"[pipeline] item {idx}/{len(run_inputs)} started: {current_input_key}")
         item_started = time.perf_counter()
         item_prefix = f"intermediate/{task_id}/items/{idx:03d}" if is_batch_mode else f"intermediate/{task_id}"
         current_bucket = input_bucket
@@ -330,6 +445,8 @@ def execute_pipeline(
 
         for step_i, step in enumerate(pipeline_steps, start=1):
             step_name = step.get("name") or f"step_{step_i:02d}"
+            step = {**step, "task_id": task_id}
+            force_rebuild = bool(step.get("docker_force_rebuild", False)) or _freshness_force_rebuild(step)
             step_result = run_worker_step.with_options(name=f"{flow_id}-{step_name}-{idx:03d}")(
                 task_id=task_id,
                 input_bucket=current_bucket,
@@ -345,12 +462,14 @@ def execute_pipeline(
                 image_tag=step.get("image_tag"),
                 cli_args=step.get("cli_args") or {},
                 docker_build=step.get("docker_build", True),
-                docker_build_context=step.get("docker_build_context", "/app"),
+                docker_force_rebuild=force_rebuild,
+                docker_build_context=step.get("docker_build_context") or repo_root_path(),
                 use_gpu=step.get("use_gpu", True),
             )
             steps_metrics.append(step_result)
             current_bucket = step_result["output_bucket"]
             current_key = step_result["output_key"]
+            _append_task_log(task_id, f"[pipeline] step finished: {step_name} ({step_result['elapsed_seconds']}s)")
 
         final_suffix = Path(current_key).suffix or ".bin"
         item_result_key = (
@@ -374,6 +493,7 @@ def execute_pipeline(
             }
         )
         logger.info("Item %s/%s completed: %s", idx, len(run_inputs), item_result_key)
+        _append_task_log(task_id, f"[pipeline] item {idx}/{len(run_inputs)} completed: {item_result_key}")
 
     flow_elapsed = time.perf_counter() - flow_started
     files_total = len(run_inputs)
@@ -455,4 +575,5 @@ def execute_pipeline(
         Body=json.dumps(metrics_payload, ensure_ascii=False, indent=2).encode("utf-8"),
         ContentType="application/json",
     )
+    _append_task_log(task_id, f"[pipeline] metrics saved: {metrics_key}")
     return final_result_key

@@ -57,7 +57,7 @@ class FormatConverter:
             return normalized
 
         if suffix in {".pcd"}:
-            points = self._load_via_open3d(input_path)
+            points = self._load_pcd_points(input_path)
             normalized = work_dir / f"{input_path.stem}_normalized.ply"
             save_points(normalized, points)
             return normalized
@@ -71,6 +71,38 @@ class FormatConverter:
         raise ValueError(
             f"Unsupported input format: {suffix}. Supported: .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz"
         )
+
+    def _load_pcd_points(self, input_path: Path) -> list[tuple[float, float, float]]:
+        # Fast path for common ASCII PCD files to avoid heavy optional deps.
+        points = self._load_ascii_pcd(input_path)
+        if points:
+            return points
+        return self._load_via_open3d(input_path)
+
+    def _load_ascii_pcd(self, input_path: Path) -> list[tuple[float, float, float]]:
+        try:
+            lines = input_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            return []
+        data_idx = -1
+        for idx, line in enumerate(lines):
+            if line.strip().lower().startswith("data "):
+                data_idx = idx
+                if "ascii" not in line.lower():
+                    return []
+                break
+        if data_idx < 0:
+            return []
+        points: list[tuple[float, float, float]] = []
+        for line in lines[data_idx + 1 :]:
+            parts = line.strip().split()
+            if len(parts) < 3:
+                continue
+            try:
+                points.append((float(parts[0]), float(parts[1]), float(parts[2])))
+            except ValueError:
+                continue
+        return points
 
     def _load_via_open3d(self, input_path: Path) -> list[tuple[float, float, float]]:
         try:

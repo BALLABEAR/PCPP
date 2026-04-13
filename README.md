@@ -121,6 +121,16 @@ Scaffold generator:
 python workers/base/create_model_adapter.py --help
 ```
 
+Runtime layering contract:
+
+- Generated adapters now default to `FROM pcpp-runtime-cuda118:latest`.
+- Shared/common dependencies (CUDA toolchain, base Python tooling, torch/cu118) belong in `workers/base/runtime/Dockerfile.cuda118`.
+- Model-specific dependencies belong in `workers/<task_type>/<model_id>/runtime.manifest.yaml`:
+  - `python.pip` for Python packages specific to the model
+  - `build_steps` for extension compilation/build commands
+- During onboarding build, shared runtime is reused when present; if it is unavailable, build falls back to CUDA base image automatically.
+- Keep model logic universal: avoid model-name-specific checks in onboarding and describe requirements through manifest + model card fields.
+
 Ready-to-run adapter scripts:
 
 - `examples/run_snowflake_model_docker.ps1` / `.sh`

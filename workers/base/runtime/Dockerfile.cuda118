@@ -18,3 +18,16 @@ RUN python -m pip install --no-cache-dir \
     --resume-retries 30 \
     torch==2.1.2 torchvision==0.16.2 \
     --index-url https://download.pytorch.org/whl/cu118
+
+# Frequently used heavy runtime dependency across many CV models.
+RUN python -m pip install --no-cache-dir \
+    --retries 30 \
+    --timeout 120 \
+    --resume-retries 30 \
+    opencv-python
+
+RUN python -m pip install --no-cache-dir \
+    --retries 30 \
+    --timeout 120 \
+    --resume-retries 30 \
+    open3d==0.19.0

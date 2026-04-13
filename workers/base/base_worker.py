@@ -18,6 +18,7 @@ class WorkerRuntimeConfig:
     task_type: str = "unknown"
     batching_mode: str = "auto"
     max_points_per_batch: int | None = None
+    accepted_input_formats: list[str] | None = None
 
 
 class BaseWorker:
@@ -51,10 +52,24 @@ class BaseWorker:
             logger.info("Worker %s finished. output=%s", self.model_id, output_path)
             return str(output_path)
 
-        normalized = self._converter.normalize(source, target_dir / "_normalized")
-        self._validate_points_limit(normalized)
-
-        output_path = self._run_with_batching(normalized, target_dir)
+        accepted = {item.lower() for item in (self._runtime.accepted_input_formats or []) if item}
+        if source.suffix.lower() in accepted:
+            normalized = source
+        else:
+            normalized = self._converter.normalize(source, target_dir / "_normalized")
+        try:
+            self._validate_points_limit(normalized)
+            output_path = self._run_with_batching(normalized, target_dir)
+        except ValueError as exc:
+            if "Unsupported point cloud format for loading" in str(exc):
+                logger.warning(
+                    "Worker %s: skipping base point-count/batching checks for unsupported format %s",
+                    self.model_id,
+                    normalized.suffix.lower(),
+                )
+                output_path = self.process(normalized, target_dir)
+            else:
+                raise
         logger.info("Worker %s finished. output=%s", self.model_id, output_path)
         return str(output_path)
 
@@ -81,7 +96,18 @@ class BaseWorker:
         max_points: int | None = None
         if isinstance(max_points_raw, int) and max_points_raw > 0:
             max_points = max_points_raw
-        return WorkerRuntimeConfig(task_type=task_type, batching_mode=mode, max_points_per_batch=max_points)
+        accepted_raw = payload.get("accepted_input_formats") or payload.get("input_format") or []
+        accepted_input_formats: list[str] = []
+        if isinstance(accepted_raw, str):
+            accepted_input_formats = [item.strip() for item in accepted_raw.split(",") if item.strip()]
+        elif isinstance(accepted_raw, list):
+            accepted_input_formats = [str(item).strip() for item in accepted_raw if str(item).strip()]
+        return WorkerRuntimeConfig(
+            task_type=task_type,
+            batching_mode=mode,
+            max_points_per_batch=max_points,
+            accepted_input_formats=accepted_input_formats,
+        )
 
     def _is_point_cloud_task(self) -> bool:
         return self._runtime.task_type in {"segmentation", "completion", "meshing", "filtering", "preprocessing"}

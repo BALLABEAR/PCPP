@@ -61,6 +61,11 @@ def _run_system_phase(manifest: dict) -> None:
 def _run_python_phase(manifest: dict) -> None:
     python_section = manifest.get("python") or {}
 
+    # Run explicit commands first so pinned/install-indexed deps (e.g. torch CUDA wheels)
+    # are present before generic package installation resolves transitive requirements.
+    for command in python_section.get("pip_commands") or []:
+        _run(command)
+
     pip_packages = python_section.get("pip") or []
     pip_extra_args = " ".join(python_section.get("pip_extra_args") or [])
     if pip_packages:
@@ -71,9 +76,6 @@ def _run_python_phase(manifest: dict) -> None:
 
     for req_file in python_section.get("pip_requirements_files") or []:
         _run(f"python -m pip install --no-cache-dir -r {req_file}")
-
-    for command in python_section.get("pip_commands") or []:
-        _run(command)
 
 
 def _run_build_phase(manifest: dict) -> None:

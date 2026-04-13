@@ -1,15 +1,51 @@
 version: 1
 base_image: nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 system_packages:
-  - python3
-  - python3-pip
-  - python3-dev
-  - build-essential
-  - git
+- python3
+- python3-pip
+- python3-dev
+- build-essential
+- git
+- libglib2.0-0
+- libgl1
+- libsm6
+- libxext6
+- libxrender1
+- ninja-build
+- cmake
 python:
   pip_commands:
-    - python -m pip install --no-cache-dir --upgrade pip setuptools wheel
-    - python -m pip install --no-cache-dir pyyaml
-build_steps: []
+  - python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+  - python -m pip install --no-cache-dir pyyaml
+  - python -m pip install --no-cache-dir torch==2.1.2 torchvision==0.16.2 --index-url
+    https://download.pytorch.org/whl/cu118
+  pip:
+  - numpy<2
+  - easydict
+  - h5py
+  - matplotlib
+  - open3d==0.19.0
+  - opencv-python
+  - pyyaml
+  - scipy
+  - tensorboardX
+  - timm==0.4.5
+  - tqdm
+  - transforms3d
+  - einops
+  pip_requirements_files: []
+  pip_extra_args: []
+build_steps:
+- cd /app/external_models/PoinTr/extensions/chamfer_dist && python setup.py build_ext
+  --inplace
+- cd /app/external_models/PoinTr/extensions/cubic_feature_sampling && python setup.py
+  build_ext --inplace
+- cd /app/external_models/PoinTr/extensions/emd && python setup.py build_ext --inplace
+- cd /app/external_models/PoinTr/extensions/gridding && python setup.py build_ext
+  --inplace
+- cd /app/external_models/PoinTr/extensions/gridding_loss && python setup.py build_ext
+  --inplace
+- python -m pip install --no-cache-dir --no-build-isolation git+https://github.com/erikwijmans/Pointnet2_PyTorch.git#subdirectory=pointnet2_ops_lib
 env:
-  PYTHONUNBUFFERED: "1"
+  PYTHONUNBUFFERED: '1'
+  TORCH_CUDA_ARCH_LIST: '8.0'

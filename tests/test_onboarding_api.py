@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 import requests
 
+from orchestrator.onboarding.error_classifier import classify_error
+
 
 ORCHESTRATOR_URL = "http://localhost:8000"
 
@@ -75,5 +77,13 @@ def test_onboarding_registry_check_endpoint_shape() -> None:
     assert response.status_code == 200, response.text
     payload = response.json()
     assert "registered" in payload
+    assert "ready" in payload
+    assert "reason" in payload
     assert payload["model_id"] == "non_existing_model_for_test"
+
+
+def test_error_classifier_detects_opencv_system_lib_issue() -> None:
+    payload = classify_error("ImportError: libgthread-2.0.so.0: cannot open shared object file")
+    assert payload is not None
+    assert payload["title"] == "Не хватает системных библиотек OpenCV"
 

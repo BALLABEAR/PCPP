@@ -1,27 +1,43 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_db
 from orchestrator.models.pipeline import Pipeline
-from flows.flow_definitions import get_pipeline_templates
+from orchestrator.pipelines.schema import (
+    CreateDraftRequest,
+    CreatePipelineRequest,
+    PipelineResponse,
+    PipelineTemplateResponse,
+    ValidateDraftRequest,
+    ValidateDraftResponse,
+)
+from orchestrator.pipelines.service import create_pipeline_draft, list_templates_with_user, validate_pipeline_draft
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
-class PipelineResponse(BaseModel):
-    id: str
-    name: str
-    config_yaml: str | None
-
-
-class CreatePipelineRequest(BaseModel):
-    name: str
-    config_yaml: str | None = None
-
-
 @router.get("/templates")
-def list_pipeline_templates() -> list[dict]:
-    return get_pipeline_templates()
+def list_pipeline_templates(db: Session = Depends(get_db)) -> list[PipelineTemplateResponse]:
+    return [PipelineTemplateResponse(**item) for item in list_templates_with_user(db)]
+
+
+@router.post("/validate-draft", response_model=ValidateDraftResponse)
+def validate_draft(payload: ValidateDraftRequest, db: Session = Depends(get_db)) -> ValidateDraftResponse:
+    result = validate_pipeline_draft(
+        db,
+        name=payload.name,
+        steps=[{"model_id": item.model_id, "params": item.params} for item in payload.steps],
+    )
+    return ValidateDraftResponse(**result)
+
+
+@router.post("/create-draft", response_model=PipelineResponse)
+def create_draft(payload: CreateDraftRequest, db: Session = Depends(get_db)) -> PipelineResponse:
+    pipeline = create_pipeline_draft(
+        db,
+        name=payload.name,
+        steps=[{"model_id": item.model_id, "params": item.params} for item in payload.steps],
+    )
+    return PipelineResponse.model_validate(pipeline, from_attributes=True)
 
 
 @router.get("", response_model=list[PipelineResponse])

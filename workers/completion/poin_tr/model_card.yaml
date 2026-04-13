@@ -12,7 +12,29 @@ gpu_required: true
 batching_mode: disabled
 github_url: ./external_models/PoinTr
 params:
+  repo_path:
+    type: path
+    required: false
+    aliases: [repo-path, repo]
+    description: optional repository override mounted under /app/external_models
+  weights_path:
+    type: path
+    required: false
+    aliases: [weights, weights-path]
+    description: model checkpoint path
+  config_path:
+    type: path
+    required: false
+    aliases: [config, config-path]
+    description: model config path
+  device:
+    type: str
+    required: false
+    aliases: []
+    description: execution device, e.g. cuda:0 or cpu
   mode:
     type: str
-    default: default
+    required: false
+    aliases: []
+    default: model
     description: runtime mode of the model adapter

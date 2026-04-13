@@ -14,6 +14,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 from orchestrator.models.model_card import ModelCard  # noqa: E402
+from orchestrator.models.model_runtime_status import ModelRuntimeStatus  # noqa: E402
 from orchestrator.models.pipeline import Pipeline  # noqa: E402
 from orchestrator.models.task import Task  # noqa: E402
 

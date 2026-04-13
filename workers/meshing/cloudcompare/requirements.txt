@@ -1,1 +1,0 @@
-# CloudCompare worker uses only stdlib + base worker deps.
