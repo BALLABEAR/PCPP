@@ -99,8 +99,6 @@ def list_templates_with_user(db: Session) -> list[dict[str, Any]]:
             continue
         payload.setdefault("source", "user")
         payload.setdefault("pipeline_id", pipeline.id)
-        # User drafts are executed by a single universal flow runner.
-        # Normalize legacy saved flow_ids to avoid stale references in frontend.
         payload["flow_id"] = USER_FLOW_ID
         if payload.get("flow_id"):
             user_templates.append(PipelineTemplateResponse(**payload).model_dump())

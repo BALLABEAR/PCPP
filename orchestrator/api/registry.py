@@ -1,8 +1,6 @@
 import os
 import shutil
-import json
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Any
 
 import docker
@@ -16,11 +14,6 @@ from orchestrator.models.model_runtime_status import ModelRuntimeStatus
 from orchestrator.registry.scanner import scan_model_cards
 
 router = APIRouter(prefix="/registry", tags=["registry"])
-
-
-def _debug_log(hypothesis_id: str, message: str, data: dict[str, Any] | None = None, run_id: str = "registry") -> None:
-    # Legacy debug sink removed: keep calls as no-op.
-    return None
 
 
 @router.get("/models")
@@ -73,7 +66,6 @@ def list_models(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 @router.delete("/models/{model_id}")
 def delete_model(model_id: str, db: Session = Depends(get_db)) -> dict[str, Any]:
     card = db.get(ModelCard, model_id)
-    _debug_log("H3", "delete_model called", {"model_id": model_id, "card_found": card is not None}, run_id=model_id)
     if not card:
         raise HTTPException(status_code=404, detail="Model not found")
 
@@ -81,17 +73,6 @@ def delete_model(model_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
     workers_root = (root / "workers").resolve()
     source_path = Path(card.source_path).resolve()
     target_dir = source_path.parent
-    _debug_log(
-        "H4",
-        "delete_model paths resolved",
-        {
-            "workers_root": str(workers_root),
-            "source_path": str(source_path),
-            "target_dir": str(target_dir),
-            "target_exists": target_dir.exists(),
-        },
-        run_id=model_id,
-    )
     if workers_root not in target_dir.parents:
         raise HTTPException(status_code=400, detail="Invalid model path")
 
@@ -122,21 +103,6 @@ def delete_model(model_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
             docker_errors.append(f"prune: {exc}")
     except Exception as exc:
         docker_errors.append(f"docker client: {exc}")
-
-    _debug_log(
-        "H5",
-        "delete_model completed",
-        {
-            "model_id": model_id,
-            "task_type": card.task_type,
-            "removed_worker_dir": removed_worker_dir,
-            "target_exists_after": target_dir.exists(),
-            "docker_removed_count": len(docker_removed),
-            "docker_errors_count": len(docker_errors),
-            "found_after_scan": found_after_scan,
-        },
-        run_id=model_id,
-    )
 
     return {
         "status": "deleted",

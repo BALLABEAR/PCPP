@@ -30,7 +30,6 @@ def upload_input_file(file: UploadFile) -> tuple[str, str]:
 
 
 def generate_download_url(bucket: str, key: str, expires_seconds: int = 600) -> str:
-    # Presigned URL must be signed for the same host the browser will call.
     public_endpoint = (os.getenv("MINIO_PUBLIC_ENDPOINT") or "http://localhost:9000").strip()
     return get_s3_client(endpoint_url=public_endpoint).generate_presigned_url(
         "get_object",

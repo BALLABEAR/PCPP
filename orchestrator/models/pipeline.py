@@ -13,7 +13,7 @@ class Pipeline(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    config_yaml: Mapped[str] = mapped_column(Text, nullable=True)
+    config_yaml: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

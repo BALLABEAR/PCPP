@@ -1,7 +1,4 @@
 import logging
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,11 +15,6 @@ from flows.flow_definitions import get_flow_definition
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("orchestrator.tasks")
 prefect_client = PrefectClient(SessionLocal)
-
-
-def _debug_log(hypothesis_id: str, message: str, data: dict[str, Any] | None = None, run_id: str = "task-run") -> None:
-    # Legacy debug sink removed: keep calls as no-op.
-    return None
 
 
 class CreateTaskRequest(BaseModel):
@@ -48,18 +40,6 @@ class TaskResponse(BaseModel):
 
 @router.post("", response_model=TaskResponse)
 def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> TaskResponse:
-    # #region agent log
-    _debug_log(
-        "H1",
-        "create_task received",
-        {
-            "flow_id": payload.flow_id,
-            "input_key": payload.input_key,
-            "flow_params_keys": sorted(list((payload.flow_params or {}).keys())),
-            "pipeline_steps_len": len((payload.flow_params or {}).get("pipeline_steps", []) or []),
-        },
-    )
-    # #endregion
     if payload.input_keys is not None and len(payload.input_keys) == 0:
         raise HTTPException(status_code=422, detail="input_keys cannot be empty")
     if not get_flow_definition(payload.flow_id):
@@ -73,9 +53,6 @@ def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> Ta
             input_keys=payload.input_keys,
         )
     except ValueError as exc:
-        # #region agent log
-        _debug_log("H2", "validate_flow_formats failed", {"error": str(exc)})
-        # #endregion
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     task = Task(
@@ -105,14 +82,6 @@ def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> Ta
     db.refresh(task)
 
     logger.info("Task created id=%s flow_run=%s", task.id, flow_run_name)
-    # #region agent log
-    _debug_log(
-        "H3",
-        "task created and triggered",
-        {"task_id": task.id, "flow_run_name": flow_run_name, "flow_id": payload.flow_id},
-        run_id=task.id,
-    )
-    # #endregion
     return TaskResponse.model_validate(task, from_attributes=True)
 
 

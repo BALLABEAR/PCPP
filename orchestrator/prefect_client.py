@@ -1,10 +1,6 @@
 import logging
 import os
 import threading
-import json
-import traceback
-from datetime import datetime, timezone
-from pathlib import Path
 
 import docker
 from sqlalchemy.orm import Session
@@ -26,13 +22,7 @@ def get_task_logs(task_id: str) -> str:
         return _TASK_LOGS.get(task_id, "")
 
 
-def _debug_log(hypothesis_id: str, message: str, data: dict | None = None, run_id: str = "prefect-thread") -> None:
-    # Legacy debug sink removed: keep calls as no-op.
-    return None
-
-
 class PrefectClient:
-    """Единая точка связи FastAPI c Prefect Flow."""
 
     def __init__(self, session_factory):
         self.session_factory = session_factory
@@ -65,7 +55,6 @@ class PrefectClient:
 
     def cancel_task(self, task_id: str) -> None:
         self._update_task(task_id, "cancelled", None, None, "Cancelled by user request")
-        # Stop worker containers created by this task.
         try:
             client = docker.from_env()
             containers = client.containers.list(
@@ -99,19 +88,6 @@ class PrefectClient:
                 raise ValueError(f"Unknown flow_id: {flow_id}")
 
             append_task_log(task_id, f"[flow] Starting flow thread for {flow_id}")
-            # #region agent log
-            _debug_log(
-                "H4",
-                "flow thread starting",
-                {
-                    "task_id": task_id,
-                    "flow_id": flow_id,
-                    "flow_params_keys": sorted(list((flow_params or {}).keys())),
-                    "pipeline_steps_len": len((flow_params or {}).get("pipeline_steps", []) or []),
-                },
-                run_id=task_id,
-            )
-            # #endregion
             self._update_task(task_id, "running", None, None)
             append_task_log(task_id, "[flow] Status -> running")
             result_key = flow_callable.with_options(name=flow_run_name)(
@@ -126,19 +102,6 @@ class PrefectClient:
         except Exception as exc:
             logger.exception("Flow execution failed for task %s", task_id)
             append_task_log(task_id, f"[flow] Failed: {exc}")
-            # #region agent log
-            _debug_log(
-                "H5",
-                "flow thread exception",
-                {
-                    "task_id": task_id,
-                    "flow_id": flow_id,
-                    "error": str(exc),
-                    "traceback": traceback.format_exc()[-4000:],
-                },
-                run_id=task_id,
-            )
-            # #endregion
             self._update_task(task_id, "failed", None, None, str(exc))
 
     def _update_task(
@@ -163,13 +126,5 @@ class PrefectClient:
             db.commit()
             if error_message:
                 append_task_log(task_id, f"[task] error_message={error_message}")
-            # #region agent log
-            _debug_log(
-                "H6",
-                "task status updated",
-                {"task_id": task_id, "status": status, "has_error": bool(error_message), "error": error_message},
-                run_id=task_id,
-            )
-            # #endregion
         finally:
             db.close()
