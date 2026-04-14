@@ -56,6 +56,9 @@ data/raw_benchmark/
 data/benchmark_inputs/
 data/benchmark_manifests/
 
+# ── Test suite (optional for runtime) ─────────────────────────────────────────
+tests/
+
 # ── User-installed model folders (keep templates out of git by default) ──────
 workers/segmentation/**
 workers/completion/**
