@@ -167,7 +167,7 @@ pytest tests/test_stage5_6_architecture_hardening.py -v
 Prepare benchmark data:
 
 ```bash
-python scripts/prepare_benchmark_data.py
+python benchmark/prepare_benchmark_data.py
 ```
 
 Run DAG benchmark:

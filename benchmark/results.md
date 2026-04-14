@@ -53,7 +53,7 @@ python benchmark/run_benchmark.py \
 ### 1) Подготовка данных одной командой
 
 ```bash
-python scripts/prepare_benchmark_data.py
+python benchmark/prepare_benchmark_data.py
 ```
 
 Скрипт:

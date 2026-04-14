@@ -1,6 +1,6 @@
 services:
 
-  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  # PostgreSQL
   postgres:
     image: postgres:15-alpine
     container_name: pcpp_postgres
@@ -19,22 +19,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── Redis ───────────────────────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: pcpp_redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT}:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  # ── MinIO ───────────────────────────────────────────────────────────────────
+  # MinIO
   minio:
     image: minio/minio:latest
     container_name: pcpp_minio
@@ -44,8 +29,8 @@ services:
       MINIO_ROOT_USER:     ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "${MINIO_PORT}:9000"       # S3 API
-      - "${MINIO_CONSOLE_PORT}:9001"  # Web UI
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -54,8 +39,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── MinIO bucket initializer ────────────────────────────────────────────────
-  # Создаёт бакеты при первом запуске и завершается.
+  # MinIO bucket initializer
   minio_init:
     image: minio/mc:latest
     container_name: pcpp_minio_init
@@ -76,22 +60,7 @@ services:
       "
     restart: "no"
 
-  # ── Prefect Server ──────────────────────────────────────────────────────────
-  prefect_server:
-    image: prefecthq/prefect:2-latest
-    container_name: pcpp_prefect_server
-    restart: unless-stopped
-    environment:
-      PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    command: >
-      prefect server start --host 0.0.0.0 --port 4200
-    ports:
-      - "4200:4200"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  # ── FastAPI Orchestrator (Этап 2) ──────────────────────────────────────────
+  # FastAPI Orchestrator
   orchestrator:
     build:
       context: .
@@ -100,7 +69,6 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      PREFECT_API_URL: http://prefect_server:4200/api
       WORKSPACE_ROOT: /app
       MINIO_ENDPOINT: http://minio:9000
       MINIO_PUBLIC_ENDPOINT: ${MINIO_PUBLIC_ENDPOINT}
@@ -121,10 +89,8 @@ services:
         condition: service_healthy
       minio_init:
         condition: service_completed_successfully
-      prefect_server:
-        condition: service_started
 
-  # ── Frontend (Этап 6) ───────────────────────────────────────────────────────
+  # Frontend
   frontend:
     build:
       context: .
@@ -139,5 +105,4 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   minio_data:

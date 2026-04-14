@@ -153,7 +153,7 @@ def collect_prepared_inputs(prepared_root: Path, input_size: str) -> list[Path]:
     if not target_dir.exists():
         raise FileNotFoundError(
             f"Prepared dataset folder not found: {target_dir}. "
-            "Run scripts/prepare_benchmark_data.py first."
+            "Run benchmark/prepare_benchmark_data.py first."
         )
     files = sorted(target_dir.glob("*.xyz"))
     if not files:
