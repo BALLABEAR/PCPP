@@ -177,22 +177,8 @@ _OPENCV_SYSTEM_PACKAGES = [
 
 
 def _debug_log(hypothesis_id: str, message: str, data: dict[str, Any] | None = None, run_id: str = "onboarding") -> None:
-    # #region agent log
-    payload = {
-        "sessionId": "e69ff4",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": "orchestrator/api/onboarding.py",
-        "message": message,
-        "data": data or {},
-        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    }
-    try:
-        with Path("debug-e69ff4.log").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # #endregion
+    # Legacy debug sink removed: keep calls as no-op.
+    return None
 
 
 def _parse_requirements_file(path: Path, visited: set[Path] | None = None) -> tuple[list[str], list[str]]:

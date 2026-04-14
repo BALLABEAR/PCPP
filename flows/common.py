@@ -13,7 +13,7 @@ from typing import Any
 
 import boto3
 from botocore.config import Config
-from prefect import get_run_logger, task
+from prefect import flow, get_run_logger, task
 
 
 def s3_client():
@@ -75,25 +75,6 @@ def docker_image_exists(tag: str) -> bool:
         return False
 
 
-def _debug_log(hypothesis_id: str, message: str, data: dict[str, Any] | None = None, run_id: str = "flow-common") -> None:
-    # #region agent log
-    payload = {
-        "sessionId": "e69ff4",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": "flows/common.py",
-        "message": message,
-        "data": data or {},
-        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    }
-    try:
-        with Path("debug-e69ff4.log").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
-
 def _append_task_log(task_id: str, message: str) -> None:
     try:
         from orchestrator.prefect_client import append_task_log
@@ -106,9 +87,7 @@ def _append_task_log(task_id: str, message: str) -> None:
 
 def ensure_shared_runtime_image(client, docker_build_context: str) -> None:
     runtime_tag = "pcpp-runtime-cuda118:latest"
-    _debug_log("H8", "ensure_shared_runtime_image enter", {"runtime_tag": runtime_tag, "context": docker_build_context})
     if docker_image_exists(runtime_tag):
-        _debug_log("H8", "shared runtime already exists", {"runtime_tag": runtime_tag})
         return
     runtime_dockerfile = str(Path(repo_root_path()) / "workers" / "base" / "runtime" / "Dockerfile.cuda118")
     started = time.perf_counter()
@@ -119,7 +98,6 @@ def ensure_shared_runtime_image(client, docker_build_context: str) -> None:
         rm=True,
         pull=False,
     )
-    _debug_log("H8", "shared runtime built", {"runtime_tag": runtime_tag, "seconds": round(time.perf_counter() - started, 3)})
 
 
 def cli_args_from_mapping(cli_args: dict[str, object] | None) -> list[str]:
@@ -198,10 +176,8 @@ def run_worker_in_docker(
     context_obj = Path(resolved_context)
     if dockerfile_path_obj.is_absolute() and context_obj in dockerfile_path_obj.parents:
         dockerfile_for_build = dockerfile_path_obj.relative_to(context_obj).as_posix()
-    _debug_log("H7", "run_worker_in_docker enter", {"task_id": task_id, "image_tag": image_tag, "docker_build": docker_build}, run_id=task_id)
     _append_task_log(task_id, f"[docker] Preparing image '{image_tag}'")
     ensure_shared_runtime_image(client, resolved_context)
-    _debug_log("H7", "shared runtime check done", {"task_id": task_id, "image_tag": image_tag}, run_id=task_id)
 
     image_cache_hit = docker_image_exists(image_tag)
     image_build_seconds = 0.0
@@ -224,20 +200,6 @@ def run_worker_in_docker(
             task_id,
             f"[docker] Reusing image '{image_tag}' (cache_hit={image_cache_hit}, force_rebuild={docker_force_rebuild})",
         )
-    _debug_log(
-        "H7",
-        "docker build decision",
-        {
-            "task_id": task_id,
-            "image_tag": image_tag,
-            "docker_build": docker_build,
-            "image_cache_hit_before": image_cache_hit,
-            "built_now": built_now,
-            "image_build_seconds": round(image_build_seconds, 3),
-        },
-        run_id=task_id,
-    )
-
     container_name = f"pcpp-step-{uuid.uuid4().hex[:12]}"
     in_container_input = f"/tmp/{input_path.name}"
     in_container_output_dir = "/tmp/out"
@@ -304,28 +266,6 @@ def run_worker_in_docker(
             container.remove(force=True)
         except Exception:
             pass
-
-
-@task(name="test_worker_step")
-def run_test_worker(task_id: str, input_bucket: str, input_key: str, result_bucket: str) -> str:
-    logger = get_run_logger()
-    s3 = s3_client()
-
-    suffix = Path(input_key).suffix
-    output_key = f"results/{task_id}/processed{suffix or '.bin'}"
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        local_in = Path(tmp_dir) / f"input{suffix or '.bin'}"
-        local_out = Path(tmp_dir) / f"output{suffix or '.bin'}"
-
-        logger.info("Downloading input s3://%s/%s", input_bucket, input_key)
-        s3.download_file(input_bucket, input_key, str(local_in))
-        time.sleep(5)
-        local_out.write_bytes(local_in.read_bytes())
-        logger.info("Uploading result s3://%s/%s", result_bucket, output_key)
-        s3.upload_file(str(local_out), result_bucket, output_key)
-
-    return output_key
 
 
 @task(name="stage_worker_step")
@@ -564,7 +504,6 @@ def execute_pipeline(
         "image_build_total_seconds": round(sum(build_seconds), 3),
         "image_cache_hits": cache_hits,
         "docker_steps_total": docker_steps_total,
-        # Backward compatibility for single-file consumers.
         "steps": items_metrics[0]["steps"] if len(items_metrics) == 1 else [],
         "items": items_metrics,
     }
@@ -577,3 +516,30 @@ def execute_pipeline(
     )
     _append_task_log(task_id, f"[pipeline] metrics saved: {metrics_key}")
     return final_result_key
+
+
+@flow(name="pipeline-flow", log_prints=True)
+def pipeline_flow(
+    task_id: str,
+    input_bucket: str,
+    input_key: str,
+    result_bucket: str,
+    pipeline_steps: list[dict[str, Any]] | None = None,
+    input_keys: list[str] | None = None,
+    task_created_at_utc: str | None = None,
+) -> str:
+    logger = get_run_logger()
+    if not pipeline_steps:
+        raise ValueError("pipeline_steps is required for pipeline_flow")
+
+    logger.info("Pipeline flow started for task %s with %s steps", task_id, len(pipeline_steps))
+    return execute_pipeline(
+        flow_id="pipeline_flow",
+        task_id=task_id,
+        input_bucket=input_bucket,
+        input_key=input_key,
+        input_keys=input_keys,
+        result_bucket=result_bucket,
+        pipeline_steps=pipeline_steps,
+        task_created_at_utc=task_created_at_utc,
+    )

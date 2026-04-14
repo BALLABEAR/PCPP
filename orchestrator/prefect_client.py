@@ -27,22 +27,8 @@ def get_task_logs(task_id: str) -> str:
 
 
 def _debug_log(hypothesis_id: str, message: str, data: dict | None = None, run_id: str = "prefect-thread") -> None:
-    # #region agent log
-    payload = {
-        "sessionId": "e69ff4",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": "orchestrator/prefect_client.py",
-        "message": message,
-        "data": data or {},
-        "timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
-    }
-    try:
-        with Path("debug-e69ff4.log").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
-    # #endregion
+    # Legacy debug sink removed: keep calls as no-op.
+    return None
 
 
 class PrefectClient:
@@ -56,7 +42,7 @@ class PrefectClient:
         task_id: str,
         input_bucket: str,
         input_key: str,
-        flow_id: str = "stage2_test_flow",
+        flow_id: str = "pipeline_flow",
         flow_params: dict | None = None,
     ) -> str:
         flow_run_name = f"{flow_id}-task-{task_id}"

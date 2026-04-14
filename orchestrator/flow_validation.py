@@ -91,8 +91,6 @@ def validate_flow_formats(
     input_key: str,
     input_keys: list[str] | None = None,
 ) -> None:
-    if not flow_id.startswith("stage4_"):
-        return
     params = flow_params or {}
     steps = _build_steps_for_validation(flow_id, params)
     if not steps:

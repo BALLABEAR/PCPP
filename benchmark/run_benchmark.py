@@ -185,7 +185,7 @@ def main() -> None:
         help="command: run shell command template; dag: run orchestrator flow via API",
     )
     parser.add_argument("--orchestrator-url", default="http://localhost:8000")
-    parser.add_argument("--flow-id", default="stage4_real_two_model_flow")
+    parser.add_argument("--flow-id", default="pipeline_flow")
     parser.add_argument(
         "--flow-params-json",
         default="{}",

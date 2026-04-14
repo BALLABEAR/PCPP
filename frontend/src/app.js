@@ -69,21 +69,7 @@ function App() {
   }
 
   function debugLog(hypothesisId, message, data = {}, runId = "wizard") {
-    // #region agent log
-    fetch("http://127.0.0.1:7748/ingest/4d1ba136-123b-435a-a74e-34fda7faa0bb", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "e69ff4" },
-      body: JSON.stringify({
-        sessionId: "e69ff4",
-        runId,
-        hypothesisId,
-        location: "frontend/src/app.js",
-        message,
-        data,
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-    // #endregion
+    return;
   }
 
   useEffect(() => {

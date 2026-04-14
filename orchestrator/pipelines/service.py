@@ -15,7 +15,7 @@ from orchestrator.models.pipeline import Pipeline
 from orchestrator.pipelines.schema import PipelineTemplateResponse
 from orchestrator.pipelines.validators import build_step_from_model, validate_step_chain
 
-USER_FLOW_ID = "stage4_real_two_model_flow"
+USER_FLOW_ID = "pipeline_flow"
 
 
 def validate_pipeline_draft(db: Session, name: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
@@ -99,6 +99,9 @@ def list_templates_with_user(db: Session) -> list[dict[str, Any]]:
             continue
         payload.setdefault("source", "user")
         payload.setdefault("pipeline_id", pipeline.id)
+        # User drafts are executed by a single universal flow runner.
+        # Normalize legacy saved flow_ids to avoid stale references in frontend.
+        payload["flow_id"] = USER_FLOW_ID
         if payload.get("flow_id"):
             user_templates.append(PipelineTemplateResponse(**payload).model_dump())
     return system_templates + user_templates
