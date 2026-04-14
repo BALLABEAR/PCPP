@@ -55,6 +55,7 @@ external_models/*
 data/raw_benchmark/
 data/benchmark_inputs/
 data/benchmark_manifests/
+benchmark/results.json
 
 # Test suite
 tests/

@@ -5,13 +5,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_LOCAL_INPUTS = [
-    "examples/model_inputs/sofa.pcd",
-    "examples/model_inputs/input.ply",
-    "examples/model_inputs/airplane.pcd",
-]
-
-
 def run_inference(command: str) -> float:
     start = time.perf_counter()
     subprocess.run(command, shell=True, check=True)
@@ -168,16 +161,10 @@ def main() -> None:
     parser.add_argument("--input-size", help="e.g. 100k, 500k, 1m (future production mode)")
     parser.add_argument("--run-command", help="One command for single benchmark run")
     parser.add_argument(
-        "--use-local-samples",
-        action="store_true",
-        help="Temporary mode: run benchmark on default three files from examples/model_inputs",
-    )
-    parser.add_argument(
         "--run-command-template",
-        help='Template for local files. Use "{input}" placeholder for file path.',
+        help='Template for prepared files. Use "{input}" placeholder for file path.',
     )
-    parser.add_argument("--repeats", type=int, default=1, help="How many times to run each local sample")
-    parser.add_argument("--inputs", nargs="*", help="Optional custom local input files")
+    parser.add_argument("--repeats", type=int, default=1, help="How many times to run each prepared input file")
     parser.add_argument(
         "--benchmark-target",
         default="command",
@@ -266,30 +253,6 @@ def main() -> None:
                         "image_build_total_seconds": build_total,
                         "throughput_files_per_second": throughput,
                         "files_total": files_total,
-                        "metadata": metadata,
-                    }
-                )
-    elif args.use_local_samples:
-        # Temporary benchmark mode for the three user-provided files.
-        if not args.run_command_template:
-            raise ValueError("--run-command-template is required with --use-local-samples")
-        input_files = [Path(p) for p in (args.inputs or DEFAULT_LOCAL_INPUTS)]
-        missing = [str(p) for p in input_files if not p.exists()]
-        if missing:
-            raise FileNotFoundError(f"Missing local sample files: {missing}")
-        for input_file in input_files:
-            for run_idx in range(1, args.repeats + 1):
-                command = args.run_command_template.format(input=str(input_file).replace("\\", "/"))
-                elapsed = run_inference(command)
-                peak_gpu_mb = get_gpu_memory_mb()
-                results.append(
-                    {
-                        "model_id": args.model_id,
-                        "input_size": input_file.name,
-                        "elapsed_seconds": round(elapsed, 3),
-                        "peak_gpu_memory_mb": peak_gpu_mb,
-                        "mode": "temporary_local_samples",
-                        "run_index": run_idx,
                         "metadata": metadata,
                     }
                 )
