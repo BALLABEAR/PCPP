@@ -54,11 +54,16 @@ class BaseWorker:
             self._validate_points_limit(normalized)
             output_path = self._run_with_batching(normalized, target_dir)
         except ValueError as exc:
-            if "Unsupported point cloud format for loading" in str(exc):
+            message = str(exc)
+            if (
+                "Unsupported point cloud format for loading" in message
+                or "no XYZ points found" in message
+            ):
                 logger.warning(
-                    "Worker %s: skipping base point-count/batching checks for unsupported format %s",
+                    "Worker %s: skipping base point-count/batching checks for input %s (%s)",
                     self.model_id,
-                    normalized.suffix.lower(),
+                    normalized,
+                    message,
                 )
                 output_path = self.process(normalized, target_dir)
             else:

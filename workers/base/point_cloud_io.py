@@ -12,7 +12,9 @@ def load_points(path: Path) -> PointRows:
     if suffix == ".npy":
         return _load_npy(path)
     if suffix == ".ply":
-        return _load_ply_ascii(path)
+        return _load_ply(path)
+    if suffix == ".pcd":
+        return _load_open3d_point_cloud(path)
     raise ValueError(f"Unsupported point cloud format for loading: {suffix}")
 
 
@@ -76,6 +78,27 @@ def _load_ply_ascii(path: Path) -> PointRows:
         except ValueError:
             continue
     return rows
+
+
+def _load_ply(path: Path) -> PointRows:
+    try:
+        rows = _load_ply_ascii(path)
+        if rows:
+            return rows
+    except Exception:
+        pass
+    return _load_open3d_point_cloud(path)
+
+
+def _load_open3d_point_cloud(path: Path) -> PointRows:
+    try:
+        import open3d as o3d
+    except Exception as exc:
+        raise RuntimeError(
+            f"Reading {path.suffix.lower()} point clouds requires open3d"
+        ) from exc
+    cloud = o3d.io.read_point_cloud(str(path))
+    return [(float(p[0]), float(p[1]), float(p[2])) for p in cloud.points]
 
 
 def _save_ply_ascii(path: Path, points: PointRows) -> None:

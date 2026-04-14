@@ -190,23 +190,16 @@ def start_docker_smoke_run(
         sample_path = "/tmp/pcpp_smoke_input.obj"
     else:
         sample_create = (
-            "p=pathlib.Path('/tmp/pcpp_smoke_input.pcd');"
-            "p.write_text("
-            "'# .PCD v0.7 - Point Cloud Data file format\\n'"
-            "'VERSION 0.7\\n'"
-            "'FIELDS x y z\\n'"
-            "'SIZE 4 4 4\\n'"
-            "'TYPE F F F\\n'"
-            "'COUNT 1 1 1\\n'"
-            "'WIDTH 4\\n'"
-            "'HEIGHT 1\\n'"
-            "'VIEWPOINT 0 0 0 1 0 0 0\\n'"
-            "'POINTS 4\\n'"
-            "'DATA ascii\\n'"
-            "'0 0 0\\n1 0 0\\n0 1 0\\n0 0 1\\n', "
-            "encoding='utf-8');"
+            "p=pathlib.Path('/tmp/pcpp_smoke_input.xyz');"
+            "import math;"
+            "u=64;v=32;n=u*v;"
+            "pts=''.join("
+            "f\"{math.sin(math.pi*(j+0.5)/v)*math.cos(2.0*math.pi*i/u):.6f} {math.sin(math.pi*(j+0.5)/v)*math.sin(2.0*math.pi*i/u):.6f} {math.cos(math.pi*(j+0.5)/v):.6f}\\n\" "
+            "for j in range(v) for i in range(u)"
+            ");"
+            "p.write_text(pts, encoding='utf-8');"
         )
-        sample_path = "/tmp/pcpp_smoke_input.pcd"
+        sample_path = "/tmp/pcpp_smoke_input.xyz"
 
     smoke_runner = (
         "import pathlib,subprocess,sys;"
