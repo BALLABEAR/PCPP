@@ -1,1 +1,0 @@
-# Generated model adapter package.
