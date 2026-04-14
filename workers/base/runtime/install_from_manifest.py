@@ -61,15 +61,12 @@ def _run_system_phase(manifest: dict) -> None:
 def _run_python_phase(manifest: dict) -> None:
     python_section = manifest.get("python") or {}
 
-    # Run explicit commands first so pinned/install-indexed deps (e.g. torch CUDA wheels)
-    # are present before generic package installation resolves transitive requirements.
     for command in python_section.get("pip_commands") or []:
         _run(command)
 
     pip_packages = python_section.get("pip") or []
     pip_extra_args = " ".join(python_section.get("pip_extra_args") or [])
     if pip_packages:
-        # Shell-escape package specs like numpy<2, torch==2.1.2+cu118, etc.
         joined = " ".join(shlex.quote(str(item)) for item in pip_packages)
         command = f"python -m pip install --no-cache-dir {pip_extra_args} {joined}".strip()
         _run(command)

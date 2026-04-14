@@ -68,8 +68,22 @@ function App() {
       .filter((v) => v && v.toLowerCase() !== "<empty>");
   }
 
-  function debugLog(hypothesisId, message, data = {}, runId = "wizard") {
-    return;
+  function startSafePolling(handler, intervalMs, onError) {
+    let inFlight = false;
+    const timer = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const shouldStop = await handler();
+        if (shouldStop) clearInterval(timer);
+      } catch (e) {
+        clearInterval(timer);
+        if (onError) onError(e);
+      } finally {
+        inFlight = false;
+      }
+    }, intervalMs);
+    return () => clearInterval(timer);
   }
 
   useEffect(() => {
@@ -77,21 +91,6 @@ function App() {
       .then((r) => r.json())
       .then((payload) => {
         const safePayload = Array.isArray(payload) ? payload : [];
-        // #region agent log
-        debugLog(
-          "H1",
-          "templates loaded",
-          {
-            total: safePayload.length,
-            systemCount: safePayload.filter((x) => x.source === "system").length,
-            userCount: safePayload.filter((x) => x.source === "user").length,
-            pointrNames: safePayload
-              .filter((x) => String(x.name || "").toLowerCase().includes("pointr"))
-              .map((x) => ({ id: x.id, name: x.name, source: x.source, flow_id: x.flow_id })),
-          },
-          "pipeline-view",
-        );
-        // #endregion
         setTemplates(safePayload);
         const safeUsers = safePayload.filter((item) => item.source === "user");
         if (safeUsers.length > 0) {
@@ -110,7 +109,7 @@ function App() {
 
   useEffect(() => {
     if (!task?.id) return undefined;
-    const timer = setInterval(async () => {
+    return startSafePolling(async () => {
       const resp = await fetch(`${API_BASE}/tasks/${task.id}`);
       const payload = await resp.json();
       setStatus(payload);
@@ -120,10 +119,10 @@ function App() {
         setTaskLogs(logsPayload.logs || "");
       }
       if (payload.status === "completed" || payload.status === "failed" || payload.status === "cancelled") {
-        clearInterval(timer);
+        return true;
       }
-    }, 3000);
-    return () => clearInterval(timer);
+      return false;
+    }, 3000, (e) => setError(`Status polling failed: ${e.message}`));
   }, [task?.id]);
 
   const userTemplates = useMemo(
@@ -154,23 +153,25 @@ function App() {
 
   useEffect(() => {
     if (!wizardRunId) return undefined;
-    const timer = setInterval(async () => {
+    return startSafePolling(async () => {
       const resp = await fetch(`${API_BASE}/onboarding/models/runs/${wizardRunId}`);
       if (!resp.ok) {
         setWizardLogs(`Failed to read run status: HTTP ${resp.status}`);
         setWizardBusy(false);
-        clearInterval(timer);
-        return;
+        return true;
       }
       const payload = await resp.json();
       setWizardLogs(payload.logs || "");
       setWizardHint(payload.error_hint || null);
       if (payload.status === "completed" || payload.status === "failed") {
         setWizardBusy(false);
-        clearInterval(timer);
+        return true;
       }
-    }, 2000);
-    return () => clearInterval(timer);
+      return false;
+    }, 2000, (e) => {
+      setWizardBusy(false);
+      setWizardLogs(`Failed to poll run logs: ${e.message}`);
+    });
   }, [wizardRunId]);
 
   function updateWizard(step, status) {
@@ -469,26 +470,12 @@ function App() {
   async function handleDeleteModel(modelId) {
     if (!window.confirm(`Вы уверены, что хотите удалить модель '${modelId}'?`)) return;
     setError("");
-    // #region agent log
-    debugLog("H3", "delete model clicked", { modelId }, "delete-model");
-    // #endregion
     try {
       const resp = await fetch(`${API_BASE}/registry/models/${encodeURIComponent(modelId)}`, {
         method: "DELETE",
       });
-      // #region agent log
-      debugLog(
-        "H3",
-        "delete model response",
-        { modelId, status: resp.status, ok: resp.ok },
-        "delete-model",
-      );
-      // #endregion
       if (!resp.ok) throw new Error(await resp.text());
-      const deletePayload = await resp.json();
-      // #region agent log
-      debugLog("H4", "delete model payload", { modelId, deletePayload }, "delete-model");
-      // #endregion
+      await resp.json();
       const modelsResp = await fetch(`${API_BASE}/registry/models`);
       const modelsPayload = await modelsResp.json();
       setModels(Array.isArray(modelsPayload) ? modelsPayload : []);
@@ -556,7 +543,6 @@ function App() {
   async function wizardScaffold() {
     updateWizard("scaffold", "running");
     try {
-      debugLog("H1", "wizardScaffold request", { allowOverwrite, model_id: onboarding.model_id, task_type: onboarding.task_type });
       const resp = await fetch(`${API_BASE}/onboarding/models/scaffold`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -616,7 +602,6 @@ function App() {
       }),
     });
     const payload = await resp.json();
-    debugLog("H3", "preflight response", { ok: resp.ok, confidence: payload?.confidence || null, notesCount: (payload?.notes || []).length });
     if (!resp.ok) {
       setWizardLogs(JSON.stringify(payload, null, 2));
       return;
@@ -650,7 +635,6 @@ function App() {
   async function wizardBuild() {
     updateWizard("build", "running");
     setWizardBusy(true);
-    debugLog("H2", "wizardBuild request", { no_cache: disableBuildCache, model_id: onboarding.model_id, task_type: onboarding.task_type });
     const resp = await fetch(`${API_BASE}/onboarding/models/build`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -727,7 +711,6 @@ function App() {
 
   async function handleWizardRun() {
     if (wizardBusy) return;
-    debugLog("H4", "handleWizardRun start", { dryRunApproved, showAdvanced, activeView });
     if (!dryRunApproved) {
       setWizardLogs("Сначала подтвердите dry-run: проверьте или примените предложенные Advanced-поля.");
       return;
@@ -749,40 +732,44 @@ function App() {
     if (!okScaffold) return;
     const buildRunId = await wizardBuild();
     if (!buildRunId) return;
-    const pollBuild = setInterval(async () => {
+    startSafePolling(async () => {
       const resp = await fetch(`${API_BASE}/onboarding/models/runs/${buildRunId}`);
       if (!resp.ok) {
-        clearInterval(pollBuild);
         setWizardBusy(false);
         updateWizard("build", "failed");
         setWizardLogs(`Failed to read build status: HTTP ${resp.status}`);
         await rollbackScaffold();
-        return;
+        return true;
       }
       const payload = await resp.json();
       if (payload.status === "completed") {
-        clearInterval(pollBuild);
         updateWizard("build", "success");
         await wizardSmoke();
+        return true;
       } else if (payload.status === "failed") {
-        clearInterval(pollBuild);
         setWizardBusy(false);
         updateWizard("build", "failed");
         await rollbackScaffold();
+        return true;
       }
-    }, 2500);
+      return false;
+    }, 2500, async (e) => {
+      setWizardBusy(false);
+      updateWizard("build", "failed");
+      setWizardLogs(`Build polling failed: ${e.message}`);
+      await rollbackScaffold();
+    });
   }
 
   useEffect(() => {
     if (!wizardRunId) return undefined;
-    const timer = setInterval(async () => {
+    return startSafePolling(async () => {
       const resp = await fetch(`${API_BASE}/onboarding/models/runs/${wizardRunId}`);
       if (!resp.ok) {
         updateWizard("smoke", "failed");
         setWizardBusy(false);
-        clearInterval(timer);
         await rollbackScaffold();
-        return;
+        return true;
       }
       const payload = await resp.json();
       if (payload.kind === "smoke") {
@@ -790,16 +777,21 @@ function App() {
           updateWizard("smoke", "success");
           await wizardRegistryCheck();
           setWizardBusy(false);
-          clearInterval(timer);
+          return true;
         } else if (payload.status === "failed") {
           updateWizard("smoke", "failed");
           setWizardBusy(false);
-          clearInterval(timer);
           await rollbackScaffold();
+          return true;
         }
       }
-    }, 2500);
-    return () => clearInterval(timer);
+      return false;
+    }, 2500, async (e) => {
+      updateWizard("smoke", "failed");
+      setWizardBusy(false);
+      setWizardLogs((prev) => `${prev}\n[smoke] Polling failed: ${e.message}\n`);
+      await rollbackScaffold();
+    });
   }, [wizardRunId]);
 
   const resultLink = status?.status === "completed" && status?.result_bucket && status?.result_key
@@ -809,7 +801,7 @@ function App() {
   return React.createElement(
     "div",
     { className: "container" },
-    React.createElement("h1", null, "PCPP Minimal Frontend (Stage 6)"),
+    React.createElement("h1", null, "Point Cloud Processing Platform"),
     React.createElement("div", { className: "top-menu" },
       React.createElement(
         "button",
@@ -932,7 +924,7 @@ function App() {
       ),
     ),
     activeView === "add-model" && React.createElement("div", { className: "card" },
-      React.createElement("h2", null, "Добавить модель (Wizard)"),
+      React.createElement("h2", null, "Добавить модель"),
       React.createElement(
         "p",
         { className: "muted" },

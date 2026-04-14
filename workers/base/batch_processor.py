@@ -4,7 +4,6 @@ from workers.base.point_cloud_io import load_points, save_points
 
 
 class BatchProcessor:
-    """Point-cloud batching and merge utility for BaseWorker."""
 
     def count_points(self, input_path: Path) -> int:
         points = load_points(input_path)

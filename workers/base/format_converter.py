@@ -8,11 +8,6 @@ SupportedCloudFile: TypeAlias = Path
 
 
 class FormatConverter:
-    """
-    Converts various point-cloud inputs to supported worker-friendly files.
-    Phase 1 supported input formats:
-      .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz
-    """
 
     def supported_formats(self) -> set[str]:
         return {".ply", ".xyz", ".txt", ".pts", ".npy", ".pcd", ".las", ".laz"}
@@ -26,7 +21,6 @@ class FormatConverter:
             target = f".{target}"
         if source not in self.supported_formats() or target not in self.supported_formats():
             return False
-        # All supported point-cloud formats can be loaded then re-saved to a target format.
         return True
 
     def convert(self, input_path: Path, target_suffix: str, work_dir: Path) -> SupportedCloudFile:
@@ -72,7 +66,6 @@ class FormatConverter:
         work_dir.mkdir(parents=True, exist_ok=True)
 
         if suffix in {".ply", ".xyz", ".txt", ".pts", ".npy"}:
-            # Already supported by internal parser.
             points = load_points(input_path)
             if not points:
                 raise ValueError(f"Input file contains no valid XYZ points: {input_path}")

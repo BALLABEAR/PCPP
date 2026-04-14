@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 MAX_POINTS_LIMIT = 2_000_000
+POINT_CLOUD_FORMATS = {".ply", ".xyz", ".txt", ".pts", ".npy", ".pcd", ".las", ".laz"}
 
 
 @dataclass
@@ -22,14 +23,6 @@ class WorkerRuntimeConfig:
 
 
 class BaseWorker:
-    """
-    Универсальный минимальный контракт воркера.
-    Любая модель должна реализовать только метод process().
-    На этапе 5 добавлены:
-    - валидация входного файла
-    - конвертация в поддерживаемый формат
-    - батчинг по model_card.yaml
-    """
 
     def __init__(self, model_id: str, model_card_path: str | None = None):
         self.model_id = model_id
@@ -111,7 +104,12 @@ class BaseWorker:
         )
 
     def _is_point_cloud_task(self) -> bool:
-        return self._runtime.task_type in {"segmentation", "completion", "meshing", "filtering", "preprocessing"}
+        accepted = {
+            item.lower() if str(item).startswith(".") else f".{str(item).lower()}"
+            for item in (self._runtime.accepted_input_formats or [])
+            if str(item).strip()
+        }
+        return bool(accepted & POINT_CLOUD_FORMATS)
 
     def _validate_points_limit(self, input_path: SupportedCloudFile) -> None:
         points = self._batch_processor.count_points(input_path)
@@ -173,7 +171,6 @@ class BaseWorker:
             work_dir=target_dir / "_normalized_output",
             target_suffix=".ply",
         )
-        # Keep only point-cloud artifact to avoid downstream pick-up of stale .npy files.
         if Path(converted) != output_path and output_path.exists():
             try:
                 output_path.unlink()
@@ -195,7 +192,6 @@ def _load_yaml_like(path: Path) -> dict[str, Any]:
 
         return yaml.safe_load(text) or {}
     except Exception:
-        # Minimal fallback parser for test/local environments without PyYAML.
         payload: dict[str, Any] = {}
         for raw in text.splitlines():
             line = raw.strip()
