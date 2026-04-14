@@ -1,7 +1,7 @@
-# ── Секреты — никогда не коммитить ──────────────────────────────────────────
+# Секреты
 .env
 
-# ── Python ───────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -18,25 +18,24 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# ── Virtual environments ─────────────────────────────────────────────────────
+# Virtual environments
 venv/
 .venv/
 env/
 .env.local
 
-# ── PyCharm ──────────────────────────────────────────────────────────────────
+# PyCharm
 .idea/
 .cursor/
 
-# ── Docker ───────────────────────────────────────────────────────────────────
-# Docker volumes управляются Docker — не нужны в репозитории
+# Docker
 
-# ── OS ───────────────────────────────────────────────────────────────────────
+# OS
 .DS_Store
 Thumbs.db
 debug-e69ff4.log
 
-# ── Данные и веса моделей ─────────────────────────────────────────────────────
+#  Данные и веса моделей
 *.pth
 *.onnx
 *.las
@@ -45,22 +44,22 @@ debug-e69ff4.log
 *.pcd
 workers/*/models/weights/
 
-# ── User examples output ──────────────────────────────────────────────────────
-examples/out/
-examples/model_outputs/
+# Examples
+examples/
 
-# ── External model repositories (downloaded from GitHub) ─────────────────────
-external_models/
+# External model repositories
+external_models/*
+!external_models/.gitkeep
 
-# ── Local benchmark datasets (generated/downloaded, not versioned) ───────────
+# Local benchmark datasets (generated/downloaded, not versioned)
 data/raw_benchmark/
 data/benchmark_inputs/
 data/benchmark_manifests/
 
-# ── Test suite (optional for runtime) ─────────────────────────────────────────
+# Test suite
 tests/
 
-# ── User-installed model folders (keep templates out of git by default) ──────
+# User-installed model folders
 workers/segmentation/**
 workers/completion/**
 workers/meshing/**
