@@ -341,16 +341,14 @@ def registry_check(payload: RegistryCheckRequest) -> dict[str, Any]:
         status = db.get(ModelRuntimeStatus, payload.model_id)
     finally:
         db.close()
-    ready = bool(status and status.build_ok and status.smoke_ok)
-    reason = None
     if card is None:
+        ready = False
         reason = "model_not_registered"
-    elif status is None:
-        reason = "model_not_verified"
-    elif not status.build_ok:
-        reason = "build_not_successful"
-    elif not status.smoke_ok:
-        reason = "smoke_not_successful"
+    else:
+        ready, reason = runtime_ops.evaluate_runtime_readiness(
+            status,
+            current_manifest_hash=runtime_ops.manifest_hash_for_model_card(card.source_path),
+        )
     return {
         "registered": card is not None,
         "ready": ready,

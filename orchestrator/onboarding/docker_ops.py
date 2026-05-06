@@ -190,16 +190,20 @@ def start_docker_smoke_run(
         sample_path = "/tmp/pcpp_smoke_input.obj"
     else:
         sample_create = (
-            "p=pathlib.Path('/tmp/pcpp_smoke_input.xyz');"
+            "p=pathlib.Path('/tmp/pcpp_smoke_input.ply');"
             "import math;"
             "u=64;v=32;n=u*v;"
-            "pts=''.join("
-            "f\"{math.sin(math.pi*(j+0.5)/v)*math.cos(2.0*math.pi*i/u):.6f} {math.sin(math.pi*(j+0.5)/v)*math.sin(2.0*math.pi*i/u):.6f} {math.cos(math.pi*(j+0.5)/v):.6f}\\n\" "
+            "pts=["
+            "(math.sin(math.pi*(j+0.5)/v)*math.cos(2.0*math.pi*i/u),"
+            " math.sin(math.pi*(j+0.5)/v)*math.sin(2.0*math.pi*i/u),"
+            " math.cos(math.pi*(j+0.5)/v)) "
             "for j in range(v) for i in range(u)"
-            ");"
-            "p.write_text(pts, encoding='utf-8');"
+            "];"
+            "header='ply\\nformat ascii 1.0\\nelement vertex %d\\nproperty float x\\nproperty float y\\nproperty float z\\nend_header\\n' % len(pts);"
+            "body=''.join(f\"{x:.6f} {y:.6f} {z:.6f}\\n\" for x,y,z in pts);"
+            "p.write_text(header + body, encoding='utf-8');"
         )
-        sample_path = "/tmp/pcpp_smoke_input.xyz"
+        sample_path = "/tmp/pcpp_smoke_input.ply"
 
     smoke_runner = (
         "import pathlib,subprocess,sys;"

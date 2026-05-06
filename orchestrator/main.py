@@ -10,6 +10,7 @@ from orchestrator.api.onboarding import router as onboarding_router
 from orchestrator.api.pipelines import router as pipelines_router
 from orchestrator.api.registry import router as registry_router
 from orchestrator.api.tasks import router as tasks_router
+from orchestrator.api.training import router as training_router
 from orchestrator.models import Base, SessionLocal, engine
 from orchestrator.registry.scanner import scan_model_cards
 
@@ -32,6 +33,7 @@ app.include_router(tasks_router)
 app.include_router(registry_router)
 app.include_router(pipelines_router)
 app.include_router(onboarding_router)
+app.include_router(training_router)
 
 
 @app.on_event("startup")

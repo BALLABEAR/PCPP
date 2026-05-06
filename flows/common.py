@@ -66,6 +66,33 @@ def repo_root_path() -> str:
     return os.getenv("WORKSPACE_ROOT", "/app")
 
 
+def discover_workspace_bind_source() -> str:
+    root = repo_root_path()
+    host_hint = os.getenv("HOST_WORKSPACE_ROOT", "").strip()
+    if host_hint:
+        return host_hint
+
+    hostname = os.getenv("HOSTNAME", "").strip()
+    if not hostname:
+        return root
+
+    try:
+        import docker
+
+        client = docker.from_env()
+        container = client.containers.get(hostname)
+        mounts = container.attrs.get("Mounts", [])
+        for mount in mounts:
+            destination = str(mount.get("Destination") or "").rstrip("/")
+            if destination == str(root).rstrip("/"):
+                source = str(mount.get("Source") or "").strip()
+                if source:
+                    return source
+    except Exception:
+        pass
+    return root
+
+
 def docker_image_exists(tag: str) -> bool:
     client = docker_client()
     try:
@@ -153,6 +180,19 @@ def _freshness_force_rebuild(step: dict[str, Any]) -> bool:
     return False
 
 
+def _looks_like_broken_cached_image(logs: str) -> bool:
+    text = str(logs or "").lower()
+    markers = [
+        "modulenotfounderror",
+        "no module named 'chamfer'",
+        "importerror",
+        "undefined symbol",
+        "cannot open shared object file",
+        "no such file or directory",
+    ]
+    return any(marker in text for marker in markers)
+
+
 def run_worker_in_docker(
     *,
     task_id: str,
@@ -181,8 +221,17 @@ def run_worker_in_docker(
 
     image_cache_hit = docker_image_exists(image_tag)
     image_build_seconds = 0.0
-    built_now = False
-    if docker_build and (docker_force_rebuild or not image_cache_hit):
+
+    def _build_image(force_rebuild: bool) -> float:
+        nonlocal image_cache_hit
+        if not docker_build:
+            return 0.0
+        if not force_rebuild and image_cache_hit:
+            _append_task_log(
+                task_id,
+                f"[docker] Reusing image '{image_tag}' (cache_hit={image_cache_hit}, force_rebuild={force_rebuild})",
+            )
+            return 0.0
         _append_task_log(task_id, f"[docker] Building image '{image_tag}' (cache_hit_before={image_cache_hit})")
         build_started = time.perf_counter()
         client.images.build(
@@ -192,15 +241,11 @@ def run_worker_in_docker(
             rm=True,
             pull=False,
         )
-        image_build_seconds = time.perf_counter() - build_started
-        built_now = True
-        _append_task_log(task_id, f"[docker] Build finished in {round(image_build_seconds, 2)}s")
-    else:
-        _append_task_log(
-            task_id,
-            f"[docker] Reusing image '{image_tag}' (cache_hit={image_cache_hit}, force_rebuild={docker_force_rebuild})",
-        )
-    container_name = f"pcpp-step-{uuid.uuid4().hex[:12]}"
+        elapsed = time.perf_counter() - build_started
+        image_cache_hit = True
+        _append_task_log(task_id, f"[docker] Build finished in {round(elapsed, 2)}s")
+        return elapsed
+
     in_container_input = f"/tmp/{input_path.name}"
     in_container_output_dir = "/tmp/out"
     worker_command = [
@@ -213,59 +258,87 @@ def run_worker_in_docker(
         in_container_output_dir,
     ] + cli_args_from_mapping(cli_args)
 
-    device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])] if use_gpu else None
-    container = client.containers.create(
-        image=image_tag,
-        command=worker_command,
-        name=container_name,
-        detach=True,
-        device_requests=device_requests,
-        labels={"pcpp.task_id": task_id, "pcpp.worker_module": worker_module},
-    )
-    try:
-        _append_task_log(task_id, f"[docker] Starting worker container '{worker_module}'")
-        in_tar_stream = io.BytesIO()
-        with tarfile.open(fileobj=in_tar_stream, mode="w") as tar:
-            data = input_path.read_bytes()
-            tarinfo = tarfile.TarInfo(name=input_path.name)
-            tarinfo.size = len(data)
-            tar.addfile(tarinfo, io.BytesIO(data))
-        in_tar_stream.seek(0)
-        container.put_archive("/tmp", in_tar_stream.read())
-
-        container.start()
-        status = container.wait()
-        status_code = int(status.get("StatusCode", 1))
-        if status_code != 0:
-            logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="ignore")
-            _append_task_log(task_id, f"[docker] Worker failed with exit={status_code}")
-            raise RuntimeError(f"Worker container exited with code {status_code}. Logs:\n{logs}")
-
-        stream, _ = container.get_archive(in_container_output_dir)
-        out_tar = b"".join(chunk for chunk in stream)
-        raw_out = output_dir / "raw_container_out"
-        raw_out.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(fileobj=io.BytesIO(out_tar), mode="r:*") as tar:
-            tar.extractall(path=raw_out)
-
-        produced_files = [p for p in raw_out.rglob("*") if p.is_file()]
-        if not produced_files:
-            raise RuntimeError("Worker container finished but produced no output files")
-
-        latest = max(produced_files, key=lambda p: p.stat().st_mtime)
-        final_output = output_dir / latest.name
-        final_output.write_bytes(latest.read_bytes())
-        _append_task_log(task_id, f"[docker] Worker output ready: {final_output.name}")
-        return final_output, {
-            "image_cache_hit": image_cache_hit,
-            "image_build_seconds": round(image_build_seconds, 3),
-            "image_tag": image_tag,
-        }
-    finally:
+    def _execute_container() -> Path:
+        container_name = f"pcpp-step-{uuid.uuid4().hex[:12]}"
+        device_requests = [DeviceRequest(count=-1, capabilities=[["gpu"]])] if use_gpu else None
+        container = client.containers.create(
+            image=image_tag,
+            command=worker_command,
+            name=container_name,
+            detach=True,
+            device_requests=device_requests,
+            volumes={
+                discover_workspace_bind_source(): {
+                    "bind": "/app",
+                    "mode": "rw",
+                },
+            },
+            labels={"pcpp.task_id": task_id, "pcpp.worker_module": worker_module},
+        )
         try:
-            container.remove(force=True)
-        except Exception:
-            pass
+            _append_task_log(task_id, f"[docker] Starting worker container '{worker_module}'")
+            in_tar_stream = io.BytesIO()
+            with tarfile.open(fileobj=in_tar_stream, mode="w") as tar:
+                data = input_path.read_bytes()
+                tarinfo = tarfile.TarInfo(name=input_path.name)
+                tarinfo.size = len(data)
+                tar.addfile(tarinfo, io.BytesIO(data))
+            in_tar_stream.seek(0)
+            container.put_archive("/tmp", in_tar_stream.read())
+
+            container.start()
+            status = container.wait()
+            status_code = int(status.get("StatusCode", 1))
+            logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="ignore")
+            if status_code != 0:
+                _append_task_log(task_id, f"[docker] Worker failed with exit={status_code}")
+                raise RuntimeError(f"Worker container exited with code {status_code}. Logs:\n{logs}")
+
+            stream, _ = container.get_archive(in_container_output_dir)
+            out_tar = b"".join(chunk for chunk in stream)
+            raw_out = output_dir / "raw_container_out"
+            raw_out.mkdir(parents=True, exist_ok=True)
+            with tarfile.open(fileobj=io.BytesIO(out_tar), mode="r:*") as tar:
+                tar.extractall(path=raw_out)
+
+            produced_files = [p for p in raw_out.rglob("*") if p.is_file()]
+            if not produced_files:
+                raise RuntimeError("Worker container finished but produced no output files")
+
+            latest = max(produced_files, key=lambda p: p.stat().st_mtime)
+            final_output = output_dir / latest.name
+            final_output.write_bytes(latest.read_bytes())
+            _append_task_log(task_id, f"[docker] Worker output ready: {final_output.name}")
+            return final_output
+        finally:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+
+    image_build_seconds += _build_image(docker_force_rebuild or not image_cache_hit)
+    try:
+        final_output = _execute_container()
+    except RuntimeError as exc:
+        logs = str(exc)
+        if image_cache_hit and not docker_force_rebuild and _looks_like_broken_cached_image(logs):
+            _append_task_log(
+                task_id,
+                "[docker] Cached image looks broken; rebuilding once and retrying this worker step.",
+            )
+            image_build_seconds += _build_image(True)
+            final_output = _execute_container()
+            return final_output, {
+                "image_cache_hit": False,
+                "image_build_seconds": round(image_build_seconds, 3),
+                "image_tag": image_tag,
+            }
+        raise
+    return final_output, {
+        "image_cache_hit": image_cache_hit,
+        "image_build_seconds": round(image_build_seconds, 3),
+        "image_tag": image_tag,
+    }
 
 
 @task(name="stage_worker_step")

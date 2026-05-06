@@ -84,6 +84,23 @@ def _build_steps_for_validation(flow_id: str, flow_params: dict[str, Any]) -> li
     return builder(flow_params)
 
 
+def list_flow_worker_modules(
+    *,
+    flow_id: str,
+    flow_params: dict[str, Any] | None,
+) -> list[str]:
+    params = flow_params or {}
+    steps = _build_steps_for_validation(flow_id, params)
+    seen: set[str] = set()
+    modules: list[str] = []
+    for step in steps:
+        worker_module = str(step.get("worker_module") or "").strip()
+        if worker_module and worker_module not in seen:
+            seen.add(worker_module)
+            modules.append(worker_module)
+    return modules
+
+
 def validate_flow_formats(
     *,
     flow_id: str,

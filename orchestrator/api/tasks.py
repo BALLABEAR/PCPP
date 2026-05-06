@@ -6,7 +6,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_db
-from orchestrator.flow_validation import validate_flow_formats
+from orchestrator.flow_validation import list_flow_worker_modules, validate_flow_formats
+from orchestrator.models.model_card import ModelCard
+from orchestrator.models.model_runtime_status import ModelRuntimeStatus
+from orchestrator.onboarding.runtime_ops import evaluate_runtime_readiness, manifest_hash_for_model_card
 from orchestrator.models import SessionLocal
 from orchestrator.models.task import Task
 from orchestrator.prefect_client import PrefectClient, get_task_logs
@@ -15,6 +18,33 @@ from flows.flow_definitions import get_flow_definition
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 logger = logging.getLogger("orchestrator.tasks")
 prefect_client = PrefectClient(SessionLocal)
+
+
+def _validate_flow_runtime_readiness(db: Session, flow_id: str, flow_params: dict[str, Any] | None) -> None:
+    worker_modules = list_flow_worker_modules(flow_id=flow_id, flow_params=flow_params)
+    if not worker_modules:
+        return
+    for worker_module in worker_modules:
+        parts = worker_module.split(".")
+        if len(parts) < 4 or parts[0] != "workers":
+            continue
+        model_id = parts[2]
+        card = db.get(ModelCard, model_id)
+        if card is None:
+            continue
+        status = db.get(ModelRuntimeStatus, model_id)
+        ready, reason = evaluate_runtime_readiness(
+            status,
+            current_manifest_hash=manifest_hash_for_model_card(card.source_path),
+        )
+        if not ready:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Pipeline step model '{model_id}' is not runtime-ready "
+                    f"({reason or 'unknown_reason'}). Rebuild/smoke-check it before running the pipeline."
+                ),
+            )
 
 
 class CreateTaskRequest(BaseModel):
@@ -52,6 +82,7 @@ def create_task(payload: CreateTaskRequest, db: Session = Depends(get_db)) -> Ta
             input_key=payload.input_key,
             input_keys=payload.input_keys,
         )
+        _validate_flow_runtime_readiness(db, payload.flow_id, payload.flow_params)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -111,4 +142,3 @@ def cancel_task(task_id: str, db: Session = Depends(get_db)) -> TaskResponse:
     prefect_client.cancel_task(task_id)
     db.refresh(task)
     return TaskResponse.model_validate(task, from_attributes=True)
-

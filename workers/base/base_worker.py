@@ -189,7 +189,6 @@ class BaseWorker:
         )
         return Path(converted)
 
-
 def _load_yaml_like(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
     try:
@@ -212,4 +211,3 @@ def _load_yaml_like(path: Path) -> dict[str, Any]:
             else:
                 payload[key] = value.strip("'\"")
         return payload
-

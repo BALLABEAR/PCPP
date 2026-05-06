@@ -11,6 +11,7 @@ import yaml
 from orchestrator.api.dependencies import get_db
 from orchestrator.models.model_card import ModelCard
 from orchestrator.models.model_runtime_status import ModelRuntimeStatus
+from orchestrator.onboarding.runtime_ops import evaluate_runtime_readiness, manifest_hash_for_model_card
 from orchestrator.registry.scanner import scan_model_cards
 
 router = APIRouter(prefix="/registry", tags=["registry"])
@@ -39,14 +40,10 @@ def list_models(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
         except Exception:
             meta = {}
         readiness = db.get(ModelRuntimeStatus, card.id)
-        ready = bool(readiness and readiness.build_ok and readiness.smoke_ok)
-        readiness_reason = None
-        if readiness is None:
-            readiness_reason = "model_not_verified"
-        elif not readiness.build_ok:
-            readiness_reason = "build_not_successful"
-        elif not readiness.smoke_ok:
-            readiness_reason = "smoke_not_successful"
+        ready, readiness_reason = evaluate_runtime_readiness(
+            readiness,
+            current_manifest_hash=manifest_hash_for_model_card(card.source_path),
+        )
         result.append(
             {
                 "id": card.id,
@@ -115,4 +112,3 @@ def delete_model(model_id: str, db: Session = Depends(get_db)) -> dict[str, Any]
         "docker_prune": prune_result,
         "registry_found_after_scan": found_after_scan,
     }
-

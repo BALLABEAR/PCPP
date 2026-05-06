@@ -1,0 +1,63 @@
+profile_id: snowflake_completion
+name: SnowflakeNet Completion
+model_id: snowflake
+task_type: completion
+image_tag: pcpp-completion-snowflake:gpu
+adapter_id: completion3d_h5_v1
+repo_path: ./external_models/SnowflakeNet
+working_dir: ./external_models/SnowflakeNet/completion
+default_train_script: train.py
+default_train_config: ./external_models/SnowflakeNet/completion/configs/c3d_cd2.yaml
+default_finetune_checkpoint: ./external_models/SnowflakeNet/pretrained_completion/ckpt-best-c3d-cd_l2.pth
+dataset:
+  kind: completion3d
+  category_file_path: ./external_models/SnowflakeNet/completion/category_files/Completion3D.json
+  partial_points_path: "{dataset_root}/%s/partial/%s/%s.h5"
+  complete_points_path: "{dataset_root}/%s/gt/%s/%s.h5"
+modes:
+  scratch:
+    resume: false
+  finetune:
+    resume: true
+config_mutations:
+  dataset:
+    category_file_path: true
+    partial_points_path: true
+    complete_points_path: true
+  train:
+    out_path: true
+    resume: true
+    model_path: true
+    gpu: true
+  test:
+    model_path: true
+    gpu: true
+checkpoint_rules:
+  priority:
+    - "**/ckpt-best*.pth"
+    - "**/ckpt-epoch-*.pth"
+metrics_catalog:
+  - key: train_curve
+    label: Кривая обучения
+    role: train
+    direction: min
+    preferred_tag_patterns:
+      - "loss/epoch/loss_3"
+    default_slot: primary
+  - key: validation_curve
+    label: Кривая валидации
+    role: val
+    direction: min
+    preferred_tag_patterns:
+      - "loss/epoch/cd_p3"
+      - "metric/cd_l2"
+    default_slot: secondary
+recommended_curves:
+  primary: train_curve
+  secondary: validation_curve
+early_stopping_defaults:
+  enabled: false
+  metric: Loss/Epoch/cd_p3
+  mode: min
+  patience: 10
+  min_delta: 0.0

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import TypeAlias
 
@@ -5,6 +6,7 @@ from workers.base.point_cloud_io import load_points, save_points
 
 
 SupportedCloudFile: TypeAlias = Path
+NORMALIZATION_META_FILENAME = "point_cloud_normalization.json"
 
 
 class FormatConverter:
@@ -23,13 +25,24 @@ class FormatConverter:
             return False
         return True
 
-    def convert(self, input_path: Path, target_suffix: str, work_dir: Path) -> SupportedCloudFile:
+    def convert(
+        self,
+        input_path: Path,
+        target_suffix: str,
+        work_dir: Path,
+        *,
+        geometry_normalization: bool = False,
+    ) -> SupportedCloudFile:
         target = target_suffix.lower().strip()
         if not target.startswith("."):
             target = f".{target}"
         if target not in self.supported_formats():
             raise ValueError(f"Unsupported target format: {target}")
-        normalized = self.normalize(input_path, work_dir)
+        normalized = self.normalize(
+            input_path,
+            work_dir,
+            geometry_normalization=geometry_normalization,
+        )
         if normalized.suffix.lower() == target:
             return normalized
         points = load_points(normalized)
@@ -37,7 +50,13 @@ class FormatConverter:
         save_points(converted, points)
         return converted
 
-    def convert_model_output_to_point_cloud(self, output_path: Path, work_dir: Path, target_suffix: str = ".ply") -> SupportedCloudFile:
+    def convert_model_output_to_point_cloud(
+        self,
+        output_path: Path,
+        work_dir: Path,
+        target_suffix: str = ".ply",
+        source_context_dir: Path | None = None,
+    ) -> SupportedCloudFile:
         target = target_suffix.lower().strip()
         if not target.startswith("."):
             target = f".{target}"
@@ -57,11 +76,20 @@ class FormatConverter:
             ) from exc
         if not points:
             raise ValueError("Model produced .npy output without any valid XYZ points.")
+        metadata = self.load_normalization_metadata(source_context_dir) if source_context_dir else None
+        if metadata:
+            points = self.restore_points(points, metadata["centroid"], metadata["scale"])
         converted = work_dir / f"{output_path.stem}{target}"
         save_points(converted, points)
         return converted
 
-    def normalize(self, input_path: Path, work_dir: Path) -> SupportedCloudFile:
+    def normalize(
+        self,
+        input_path: Path,
+        work_dir: Path,
+        *,
+        geometry_normalization: bool = False,
+    ) -> SupportedCloudFile:
         suffix = input_path.suffix.lower()
         work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,21 +97,33 @@ class FormatConverter:
             points = load_points(input_path)
             if not points:
                 raise ValueError(f"Input file contains no valid XYZ points: {input_path}")
-            normalized = work_dir / f"{input_path.stem}_normalized{suffix}"
-            save_points(normalized, points)
-            return normalized
+            return self._save_normalized_points(
+                input_path=input_path,
+                work_dir=work_dir,
+                points=points,
+                output_suffix=suffix,
+                geometry_normalization=geometry_normalization,
+            )
 
         if suffix in {".pcd"}:
             points = self._load_pcd_points(input_path)
-            normalized = work_dir / f"{input_path.stem}_normalized.ply"
-            save_points(normalized, points)
-            return normalized
+            return self._save_normalized_points(
+                input_path=input_path,
+                work_dir=work_dir,
+                points=points,
+                output_suffix=".ply",
+                geometry_normalization=geometry_normalization,
+            )
 
         if suffix in {".las", ".laz"}:
             points = self._load_via_laspy(input_path)
-            normalized = work_dir / f"{input_path.stem}_normalized.ply"
-            save_points(normalized, points)
-            return normalized
+            return self._save_normalized_points(
+                input_path=input_path,
+                work_dir=work_dir,
+                points=points,
+                output_suffix=".ply",
+                geometry_normalization=geometry_normalization,
+            )
 
         raise ValueError(
             f"Unsupported input format: {suffix}. Supported: .ply, .xyz, .txt, .pts, .npy, .pcd, .las, .laz"
@@ -146,3 +186,100 @@ class FormatConverter:
         if not points:
             raise ValueError(f"Failed to read points from LAS/LAZ: {input_path}")
         return points
+
+    def _save_normalized_points(
+        self,
+        *,
+        input_path: Path,
+        work_dir: Path,
+        points: list[tuple[float, float, float]],
+        output_suffix: str,
+        geometry_normalization: bool,
+    ) -> SupportedCloudFile:
+        points_to_save = points
+        metadata: dict[str, object] | None = None
+        if geometry_normalization:
+            points_to_save, centroid, scale = self._normalize_points_geometrically(points)
+            metadata = {
+                "centroid": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
+                "scale": float(scale),
+            }
+        normalized = work_dir / f"{input_path.stem}_normalized{output_suffix}"
+        save_points(normalized, points_to_save)
+        if metadata:
+            self._write_normalization_metadata(work_dir, metadata)
+        return normalized
+
+    def load_normalization_metadata(self, search_dir: Path | None) -> dict[str, object] | None:
+        if not search_dir or not search_dir.exists():
+            return None
+        meta_path = search_dir / NORMALIZATION_META_FILENAME
+        if not meta_path.exists():
+            return None
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        centroid = payload.get("centroid")
+        scale = payload.get("scale")
+        if (
+            not isinstance(centroid, list)
+            or len(centroid) != 3
+            or not all(isinstance(item, (int, float)) for item in centroid)
+            or not isinstance(scale, (int, float))
+        ):
+            return None
+        return {
+            "centroid": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
+            "scale": float(scale),
+        }
+
+    def restore_points(
+        self,
+        points: list[tuple[float, float, float]],
+        centroid: list[float],
+        scale: float,
+    ) -> list[tuple[float, float, float]]:
+        restored: list[tuple[float, float, float]] = []
+        safe_scale = float(scale) if abs(float(scale)) > 1e-8 else 1.0
+        for x, y, z in points:
+            restored.append(
+                (
+                    float(x) * safe_scale + float(centroid[0]),
+                    float(y) * safe_scale + float(centroid[1]),
+                    float(z) * safe_scale + float(centroid[2]),
+                )
+            )
+        return restored
+
+    def _normalize_points_geometrically(
+        self,
+        points: list[tuple[float, float, float]],
+    ) -> tuple[list[tuple[float, float, float]], list[float], float]:
+        centroid = [
+            sum(item[axis] for item in points) / len(points)
+            for axis in range(3)
+        ]
+        centered = [
+            (
+                float(item[0]) - centroid[0],
+                float(item[1]) - centroid[1],
+                float(item[2]) - centroid[2],
+            )
+            for item in points
+        ]
+        scale = max(
+            max(abs(x), abs(y), abs(z))
+            for x, y, z in centered
+        )
+        if scale <= 1e-8:
+            scale = 1.0
+        normalized = [
+            (x / scale, y / scale, z / scale)
+            for x, y, z in centered
+        ]
+        return normalized, [float(centroid[0]), float(centroid[1]), float(centroid[2])], float(scale)
+
+    def _write_normalization_metadata(self, work_dir: Path, payload: dict[str, object]) -> None:
+        meta_path = work_dir / NORMALIZATION_META_FILENAME
+        meta_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")

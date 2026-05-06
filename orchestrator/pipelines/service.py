@@ -12,6 +12,7 @@ from flows.flow_definitions import get_pipeline_templates
 from orchestrator.models.model_card import ModelCard
 from orchestrator.models.model_runtime_status import ModelRuntimeStatus
 from orchestrator.models.pipeline import Pipeline
+from orchestrator.onboarding.runtime_ops import evaluate_runtime_readiness, manifest_hash_for_model_card
 from orchestrator.pipelines.schema import PipelineTemplateResponse
 from orchestrator.pipelines.validators import build_step_from_model, validate_step_chain
 
@@ -301,21 +302,15 @@ def _validate_step_runtime_assets(step: dict[str, Any], card: ModelCard, idx: in
 
 def _validate_model_readiness(db: Session, card: ModelCard, idx: int) -> str | None:
     status = db.get(ModelRuntimeStatus, card.id)
-    if not status:
-        if "generated adapter scaffold" not in str(card.description or "").lower():
+    ready, reason = evaluate_runtime_readiness(
+        status,
+        current_manifest_hash=manifest_hash_for_model_card(card.source_path),
+    )
+    if not ready:
+        if reason == "model_not_verified" and "generated adapter scaffold" not in str(card.description or "").lower():
             return None
         return (
-            f"Step {idx}: model '{card.id}' is not runtime-ready. "
-            "Run onboarding build and smoke-run before using it in pipelines."
-        )
-    if not status.build_ok:
-        return (
-            f"Step {idx}: model '{card.id}' has no successful build. "
-            "Re-run onboarding build and check dependencies."
-        )
-    if not status.smoke_ok:
-        return (
-            f"Step {idx}: model '{card.id}' has no successful smoke-run. "
-            "Re-run onboarding smoke-run before adding to a pipeline."
+            f"Step {idx}: model '{card.id}' is not runtime-ready "
+            f"({reason or 'unknown_reason'}). Re-run build/smoke before using it in pipelines."
         )
     return None

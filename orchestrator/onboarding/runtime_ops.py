@@ -110,6 +110,52 @@ def manifest_hash(root: Path, task_type: str, model_id: str) -> str | None:
     return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
 
 
+def manifest_hash_for_model_card(source_path: str | Path) -> str | None:
+    import hashlib
+
+    card_path = Path(source_path)
+    manifest_path = card_path.parent / "runtime.manifest.yaml"
+    if not manifest_path.exists():
+        return None
+    return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+
+def docker_image_exists(tag: str | None) -> bool:
+    image_tag = str(tag or "").strip()
+    if not image_tag:
+        return False
+    try:
+        import docker
+
+        client = docker.from_env()
+        client.images.get(image_tag)
+        return True
+    except Exception:
+        return False
+
+
+def evaluate_runtime_readiness(
+    status: ModelRuntimeStatus | None,
+    *,
+    current_manifest_hash: str | None = None,
+) -> tuple[bool, str | None]:
+    if status is None:
+        return False, "model_not_verified"
+    if not status.build_ok:
+        return False, "build_not_successful"
+    if not status.smoke_ok:
+        return False, "smoke_not_successful"
+    if current_manifest_hash and status.manifest_hash != current_manifest_hash:
+        return False, "runtime_manifest_changed"
+    if status.last_build_at and status.last_smoke_at and status.last_smoke_at < status.last_build_at:
+        return False, "smoke_not_current"
+    if not status.last_image_tag:
+        return False, "runtime_image_missing"
+    if not docker_image_exists(status.last_image_tag):
+        return False, "runtime_image_missing"
+    return True, None
+
+
 def update_model_runtime_status(
     *,
     model_id: str,
