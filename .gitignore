@@ -34,6 +34,7 @@ env/
 .DS_Store
 Thumbs.db
 debug-e69ff4.log
+docs/CHAT_CONTEXT.local.md
 
 #  Данные и веса моделей
 *.pth
@@ -56,9 +57,20 @@ data/raw_benchmark/
 data/benchmark_inputs/
 data/benchmark_manifests/
 benchmark/results.json
+datasets/**
+!datasets/
+!datasets/prepare_completion_datasets_v2.py
+data/datasets/*
+!data/datasets/.gitkeep
+
+# Training artifacts
+training_runs/*
+!training_runs/.gitkeep
 
 # Test suite
 tests/
+!tests/
+!tests/*.py
 
 # Workers: ignore all generated/user model folders by default
 workers/**
