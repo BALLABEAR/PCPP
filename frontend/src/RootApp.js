@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "https://esm.sh/react@18.3.1";
 
-import { getJson } from "./lib/api.js";
-import { PipelineRunView } from "./views/PipelineRunView.js";
-import { OnboardingView } from "./views/OnboardingView.js";
-import { PipelineEditorView } from "./views/PipelineEditorView.js";
-import { TrainingView } from "./views/TrainingView.js";
+import { getJson } from "./lib/api.js?v=20260508b";
+import { PipelineRunView } from "./views/PipelineRunView.js?v=20260508b";
+import { OnboardingView } from "./views/OnboardingView.js?v=20260508b";
+import { PipelineEditorView } from "./views/PipelineEditorView.js?v=20260508b";
+import { TrainingView } from "./views/TrainingView.js?v=20260508b";
 
 export function RootApp() {
   const [activeView, setActiveView] = useState("pipeline");

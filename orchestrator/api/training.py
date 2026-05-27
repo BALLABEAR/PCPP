@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
@@ -23,13 +24,17 @@ from orchestrator.training.metrics import (
     summarize_metric_events,
 )
 from orchestrator.training.presets import (
+    TrainingPreset,
+    find_training_preset_by_model,
     load_training_preset,
     list_training_presets,
     resolve_workspace_path,
+    save_training_preset,
     to_workspace_relative,
 )
 from orchestrator.training.runner import (
     build_run_artifacts,
+    cancel_training_run,
     create_training_run_record,
     resolve_training_request,
     start_training_run,
@@ -41,12 +46,12 @@ router = APIRouter(prefix="/training", tags=["training"])
 class TrainingRunRequest(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
     profile_id: str
-    target_root: str
-    training_data_root: str
+    form_values: dict[str, str] = Field(default_factory=dict)
+    mode: str = "scratch"
     train_percent: int = 80
     val_percent: int = 10
     test_percent: int = 10
-    mode: Literal["scratch", "finetune"] = "scratch"
+    finetune_epochs: int = 50
     train_script_override: str = ""
     config_path_override: str = ""
     checkpoint_override: str = ""
@@ -57,6 +62,12 @@ class TrainingRunRequest(BaseModel):
     early_stopping_mode: Literal["min", "max"] = "min"
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 0.0
+
+
+class TrainingPresetPayload(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    payload: dict[str, Any]
+    overwrite: bool = False
 
 
 class EarlyStoppingStateResponse(BaseModel):
@@ -96,15 +107,13 @@ class TrainingRunResponse(BaseModel):
     task_type: str
     status: str
     mode: str
-    target_root: str
-    training_data_root: str
+    finetune_epochs: int | None
+    form_values: dict[str, str]
     train_percent: int
     val_percent: int
     test_percent: int
     split_counts: dict[str, int]
     sample_counts: dict[str, int]
-    adapter_name: str | None
-    adapter_dataset_root: str | None
     train_script: str
     config_path: str
     resolved_config_path: str
@@ -112,7 +121,6 @@ class TrainingRunResponse(BaseModel):
     metrics_path: str
     best_checkpoint_path: str | None
     best_checkpoint_pipeline_path: str | None
-    geometry_normalization: bool
     metrics_history_available: bool
     available_metric_tags: list[str]
     metrics_catalog: list[dict[str, Any]]
@@ -129,6 +137,12 @@ class TrainingRunResponse(BaseModel):
 
 class TrainingProfilesResponse(BaseModel):
     profiles: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TrainingPresetStatusResponse(BaseModel):
+    exists: bool
+    profile_id: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 def _normalize_workspace_relative_path(raw: str | None) -> str | None:
@@ -175,11 +189,26 @@ def _build_early_stopping_config(snapshot: dict[str, Any]) -> EarlyStoppingConfi
     )
 
 
-def _read_metrics_state(
-    run: TrainingRun,
-    snapshot: dict[str, Any],
-    preset: Any | None,
-) -> tuple[bool, list[str], dict[str, dict[str, Any]], str | None, EarlyStoppingStateResponse]:
+def _catalog_item_by_key(preset: Any, key: str | None) -> dict[str, Any] | None:
+    wanted = str(key or "").strip()
+    if not wanted:
+        return None
+    for item in list(getattr(preset, "metrics_catalog", []) or []):
+        if str(item.get("key") or "").strip() == wanted:
+            return item
+    return None
+
+
+def _resolve_default_monitor_metric(preset: Any) -> tuple[str, str]:
+    defaults = dict(getattr(preset, "early_stopping_defaults", {}) or {})
+    metric_key = str(defaults.get("metric_key") or "validation_curve").strip()
+    item = _catalog_item_by_key(preset, metric_key)
+    default_tag = str((item or {}).get("default_tag") or defaults.get("metric") or "").strip()
+    direction = str((item or {}).get("direction") or defaults.get("mode") or "min").strip()
+    return default_tag, direction
+
+
+def _read_metrics_state(run: TrainingRun, snapshot: dict[str, Any], preset: Any | None) -> tuple[bool, list[str], dict[str, dict[str, Any]], str | None, EarlyStoppingStateResponse]:
     run_dir = resolve_workspace_path(run.run_dir)
     history_path = metric_history_path_for_run(run_dir)
     early_stopping_path = early_stopping_state_path_for_run(run_dir)
@@ -205,6 +234,7 @@ def _serialize_run(run: TrainingRun) -> TrainingRunResponse:
     snapshot = _read_request_snapshot(run)
     split_percentages = snapshot.get("split_percentages") or {}
     preset = load_training_preset(run.profile_id)
+    form_values = {str(key): str(value) for key, value in (snapshot.get("form_values") or {}).items()}
     metrics_history_available, available_metric_tags, resolved_metric_views, recommended_monitor_metric, early_stopping_state = _read_metrics_state(run, snapshot, preset)
     return TrainingRunResponse(
         run_id=run.id,
@@ -213,15 +243,13 @@ def _serialize_run(run: TrainingRun) -> TrainingRunResponse:
         task_type=run.task_type,
         status=run.status,
         mode=run.mode,
-        target_root=str(snapshot.get("target_root") or run.dataset_root),
-        training_data_root=str(snapshot.get("training_data_root") or ""),
+        form_values=form_values,
+        finetune_epochs=(int(snapshot.get("finetune_epochs")) if snapshot.get("finetune_epochs") is not None else None),
         train_percent=int(split_percentages.get("train", 0)),
         val_percent=int(split_percentages.get("val", 0)),
         test_percent=int(split_percentages.get("test", 0)),
         split_counts={str(key): int(value) for key, value in (snapshot.get("split_counts") or {}).items()},
         sample_counts={str(key): int(value) for key, value in (snapshot.get("sample_counts") or {}).items()},
-        adapter_name=snapshot.get("adapter_name"),
-        adapter_dataset_root=snapshot.get("adapter_dataset_root"),
         train_script=run.train_script,
         config_path=run.config_path,
         resolved_config_path=run.resolved_config_path,
@@ -229,7 +257,6 @@ def _serialize_run(run: TrainingRun) -> TrainingRunResponse:
         metrics_path=run.metrics_path,
         best_checkpoint_path=_normalize_workspace_relative_path(run.best_checkpoint_path),
         best_checkpoint_pipeline_path=_to_pipeline_safe_path(run.best_checkpoint_path),
-        geometry_normalization=bool(snapshot.get("geometry_normalization", True)),
         metrics_history_available=metrics_history_available,
         available_metric_tags=available_metric_tags,
         metrics_catalog=list(preset.metrics_catalog),
@@ -272,33 +299,21 @@ def list_profiles() -> TrainingProfilesResponse:
                 "registered": card is not None,
                 "ready": ready,
                 "readiness_reason": readiness_reason,
-                "default_train_script": to_workspace_relative(preset.default_train_script),
-                "default_train_config": to_workspace_relative(preset.default_train_config),
-                "default_finetune_checkpoint": (
-                    to_workspace_relative(preset.default_finetune_checkpoint)
-                    if preset.default_finetune_checkpoint
-                    else None
-                ),
-                "dataset_kind": preset.dataset_kind,
-                "dataset_fields": {
-                    "target_root_label": "Путь к target",
-                    "training_data_root_label": "Путь к обучающей выборке",
-                    "geometry_normalization_label": "Нормализовать геометрию",
-                },
-                "dataset_structure_hint": (
-                    "Ожидается структура вида Full_Clouds/<class>/<target>.ply и "
-                    "Partial_Clouds/<class>/<target>/partial_XXX.ply."
-                ),
-                "geometry_normalization_hint": (
-                    "Если включено, orchestrator нормализует partial и target для каждого объекта "
-                    "по общему centroid/scale перед записью training artifacts."
-                ),
-                "adapter_managed_by": "orchestrator",
+                "default_train_script": to_workspace_relative(preset.default_train_script) if preset.default_train_script else None,
+                "default_train_config": to_workspace_relative(preset.default_train_config) if preset.default_train_config else None,
+                "default_finetune_checkpoint": to_workspace_relative(preset.default_finetune_checkpoint) if preset.default_finetune_checkpoint else None,
+                "form_fields": list(preset.form_fields),
+                "dataset_structure_hint": "Поля и форматы задаются в training preset.",
+                "supports_config_override": preset.default_train_config is not None,
+                "finetune_defaults": {"default_epochs": 50},
+                "geometry_normalization_supported": bool(preset.geometry_normalization_supported),
+                "geometry_normalization_default": bool(preset.geometry_normalization_default),
                 "supported_modes": sorted(preset.modes.keys()),
                 "metrics_catalog": list(preset.metrics_catalog),
                 "recommended_curves": dict(preset.recommended_curves),
                 "early_stopping_defaults": {
                     "enabled": bool(preset.early_stopping_defaults.get("enabled", False)),
+                    "metric_key": str(preset.early_stopping_defaults.get("metric_key") or "validation_curve"),
                     "metric": str(preset.early_stopping_defaults.get("metric") or ""),
                     "mode": str(preset.early_stopping_defaults.get("mode") or "min"),
                     "patience": int(preset.early_stopping_defaults.get("patience", 10)),
@@ -307,6 +322,46 @@ def list_profiles() -> TrainingProfilesResponse:
             }
         )
     return TrainingProfilesResponse(profiles=profiles)
+
+
+@router.get("/presets/{model_id}", response_model=TrainingPresetStatusResponse)
+def get_preset_by_model(model_id: str) -> TrainingPresetStatusResponse:
+    preset = find_training_preset_by_model(model_id)
+    if preset is None:
+        return TrainingPresetStatusResponse(exists=False)
+    import yaml
+
+    payload = yaml.safe_load(Path(preset.source_path).read_text(encoding="utf-8")) or {}
+    return TrainingPresetStatusResponse(exists=True, profile_id=preset.profile_id, payload=payload)
+
+
+@router.post("/presets/validate")
+def validate_preset(payload: TrainingPresetPayload) -> dict[str, Any]:
+    try:
+        TrainingPreset.from_payload(Path("<validation>.yaml"), payload.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"valid": True}
+
+
+@router.post("/presets")
+def create_preset(payload: TrainingPresetPayload) -> dict[str, Any]:
+    try:
+        parsed = save_training_preset(payload.payload, overwrite=payload.overwrite)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"profile_id": parsed.profile_id, "source_path": to_workspace_relative(parsed.source_path)}
+
+
+@router.put("/presets/{profile_id}")
+def update_preset(profile_id: str, payload: TrainingPresetPayload) -> dict[str, Any]:
+    merged = dict(payload.payload)
+    merged["profile_id"] = profile_id
+    try:
+        parsed = save_training_preset(merged, overwrite=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"profile_id": parsed.profile_id, "source_path": to_workspace_relative(parsed.source_path)}
 
 
 @router.post("/runs", response_model=TrainingRunResponse)
@@ -324,25 +379,16 @@ def start_run(payload: TrainingRunRequest) -> TrainingRunResponse:
         db.close()
     if card is None:
         raise HTTPException(status_code=409, detail=f"Model '{preset.model_id}' is not registered in the catalog.")
-    ready, readiness_reason = evaluate_runtime_readiness(
-        runtime,
-        current_manifest_hash=manifest_hash_for_model_card(card.source_path),
-    )
+    ready, readiness_reason = evaluate_runtime_readiness(runtime, current_manifest_hash=manifest_hash_for_model_card(card.source_path))
     if not ready:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Model '{preset.model_id}' is not runtime-ready "
-                f"({readiness_reason or 'unknown_reason'}). Build and smoke-check it first."
-            ),
-        )
+        raise HTTPException(status_code=409, detail=(f"Model '{preset.model_id}' is not runtime-ready ({readiness_reason or 'unknown_reason'}). Build and smoke-check it first."))
 
     try:
+        resolved_metric, resolved_mode = _resolve_default_monitor_metric(preset)
         resolved = resolve_training_request(
             preset=preset,
             mode=payload.mode,
-            target_root_raw=payload.target_root,
-            training_data_root_raw=payload.training_data_root,
+            form_values_raw=payload.form_values,
             train_percent=payload.train_percent,
             val_percent=payload.val_percent,
             test_percent=payload.test_percent,
@@ -351,12 +397,32 @@ def start_run(payload: TrainingRunRequest) -> TrainingRunResponse:
             checkpoint_path_raw=payload.checkpoint_override,
             use_gpu=payload.use_gpu,
             geometry_normalization=payload.geometry_normalization,
+            finetune_epochs=payload.finetune_epochs,
             early_stopping_enabled=payload.early_stopping_enabled,
-            early_stopping_metric=payload.early_stopping_metric,
-            early_stopping_mode=payload.early_stopping_mode,
+            early_stopping_metric=(payload.early_stopping_metric or resolved_metric),
+            early_stopping_mode=(payload.early_stopping_mode or resolved_mode),
             early_stopping_patience=payload.early_stopping_patience,
             early_stopping_min_delta=payload.early_stopping_min_delta,
         )
+        if resolved.config_path is not None:
+            import yaml
+
+            config_payload = yaml.safe_load(resolved.config_path.read_text(encoding="utf-8")) or {}
+            test_split = str(((config_payload.get("test") or {}).get("split") or "")).strip().lower()
+            if test_split == "val" and int(resolved.split_percentages.val) < 1:
+                raise ValueError(
+                    "This training config validates on 'val', but val split is 0%. "
+                    "Set val_percent >= 1."
+                )
+        if resolved.mode == "finetune":
+            contract = dict(getattr(preset, "finetune_contract", {}) or {})
+            checkpoint_epoch_path = str(contract.get("checkpoint_epoch_path") or "").strip()
+            config_epoch_path = str(contract.get("config_epoch_path") or "").strip()
+            if not checkpoint_epoch_path or not config_epoch_path:
+                raise ValueError(
+                    "Finetune mode requires preset.finetune_contract with "
+                    "'checkpoint_epoch_path' and 'config_epoch_path'."
+                )
         run_id = uuid.uuid4().hex
         artifacts = build_run_artifacts(preset=preset, resolved=resolved, run_id=run_id)
         run = create_training_run_record(run_id=run_id, preset=preset, resolved=resolved, artifacts=artifacts)
@@ -395,6 +461,17 @@ def get_run(run_id: str) -> TrainingRunResponse:
         db.close()
 
 
+@router.post("/runs/{run_id}/cancel")
+def cancel_run(run_id: str) -> dict[str, Any]:
+    try:
+        result = cancel_training_run(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Training run not found") from exc
+    if result.get("status") == "cancel_failed":
+        raise HTTPException(status_code=409, detail=result.get("error") or "Failed to cancel training run.")
+    return {"run_id": run_id, **result}
+
+
 @router.get("/runs/{run_id}/metrics", response_model=TrainingMetricsResponse)
 def get_run_metrics(run_id: str) -> TrainingMetricsResponse:
     db = SessionLocal()
@@ -410,10 +487,7 @@ def get_run_metrics(run_id: str) -> TrainingMetricsResponse:
     history_path = metric_history_path_for_run(run_dir)
     events = load_metric_events(history_path)
     available_metric_tags, metric_series = summarize_metric_events(events)
-    early_state = read_early_stopping_state(
-        early_stopping_state_path_for_run(run_dir),
-        _build_early_stopping_config(snapshot),
-    )
+    early_state = read_early_stopping_state(early_stopping_state_path_for_run(run_dir), _build_early_stopping_config(snapshot))
     preset = load_training_preset(run.profile_id)
     resolved_metric_views, recommended_monitor_metric = resolve_metric_views(
         available_tags=available_metric_tags,
@@ -430,3 +504,4 @@ def get_run_metrics(run_id: str) -> TrainingMetricsResponse:
         recommended_monitor_metric=recommended_monitor_metric,
         early_stopping_state=EarlyStoppingStateResponse(**early_state.__dict__),
     )
+

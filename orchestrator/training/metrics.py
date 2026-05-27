@@ -161,6 +161,23 @@ def resolve_metric_views(
     recommended_curves: dict[str, str],
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
     safe_tags = [str(tag).strip() for tag in available_tags if str(tag).strip()]
+    safe_tags_lower = {tag: tag.lower() for tag in safe_tags}
+    epoch_metric_tags = [
+        tag for tag in safe_tags
+        if ("/epoch/" in tag.lower()) or tag.lower().startswith("metric/")
+    ]
+    train_like_tags = [
+        tag for tag in safe_tags
+        if ("loss/" in safe_tags_lower[tag]) or ("/epoch/" in safe_tags_lower[tag]) or ("/batch/" in safe_tags_lower[tag])
+    ]
+    val_like_tags = [
+        tag for tag in safe_tags
+        if ("metric/" in safe_tags_lower[tag]) or ("val" in safe_tags_lower[tag]) or ("test" in safe_tags_lower[tag])
+    ]
+    val_like_epoch_metric_tags = [
+        tag for tag in epoch_metric_tags
+        if ("metric/" in safe_tags_lower[tag]) or ("val" in safe_tags_lower[tag]) or ("test" in safe_tags_lower[tag])
+    ]
     resolved: dict[str, dict[str, Any]] = {}
     recommended_monitor_metric: str | None = None
 
@@ -172,19 +189,34 @@ def resolve_metric_views(
         role = str(item.get("role") or "aux").strip()
         direction = str(item.get("direction") or "min").strip()
         patterns = [str(value).strip().lower() for value in (item.get("preferred_tag_patterns") or []) if str(value).strip()]
-        exact_tag = str(item.get("resolved_tag") or "").strip()
+        exact_tag = str(item.get("default_tag") or item.get("resolved_tag") or "").strip()
+        role_lower = role.lower()
 
         resolved_tag = exact_tag if exact_tag in safe_tags else None
         if resolved_tag is None and patterns:
-            scored: list[tuple[int, str]] = []
-            for tag in safe_tags:
-                tag_lower = tag.lower()
-                matches = sum(1 for pattern in patterns if pattern in tag_lower)
-                if matches > 0:
-                    scored.append((matches, tag))
-            if scored:
+            if role_lower == "train":
+                primary_pool = [tag for tag in epoch_metric_tags if tag in train_like_tags]
+                fallback_pool = train_like_tags
+            elif role_lower in {"val", "test"}:
+                primary_pool = val_like_epoch_metric_tags
+                fallback_pool = val_like_tags
+            else:
+                primary_pool = epoch_metric_tags
+                fallback_pool = safe_tags
+
+            def _pick_from(tags_pool: list[str]) -> str | None:
+                scored: list[tuple[int, str]] = []
+                for tag in tags_pool:
+                    tag_lower = tag.lower()
+                    matches = sum(1 for pattern in patterns if pattern in tag_lower)
+                    if matches > 0:
+                        scored.append((matches, tag))
+                if not scored:
+                    return None
                 scored.sort(key=lambda item: (-item[0], item[1]))
-                resolved_tag = scored[0][1]
+                return scored[0][1]
+
+            resolved_tag = _pick_from(primary_pool) or _pick_from(fallback_pool)
 
         resolved[key] = {
             "key": key,

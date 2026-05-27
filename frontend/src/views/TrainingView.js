@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from "https://esm.sh/react@18.3.1";
 
-import { getJson, postJson } from "../lib/api.js";
-import { startSafePolling } from "../lib/polling.js";
-import { LogPanel } from "../components/LogPanel.js";
-import { MetricChart } from "../components/MetricChart.js";
+import { getJson, postJson } from "../lib/api.js?v=20260508b";
+import { startSafePolling } from "../lib/polling.js?v=20260508b";
+import { LogPanel } from "../components/LogPanel.js?v=20260508b";
+import { MetricChart } from "../components/MetricChart.js?v=20260508b";
 import {
   ActionBar,
   CollapsibleSection,
@@ -11,7 +11,7 @@ import {
   InlineHint,
   SectionCard,
   StatusBadge,
-} from "../components/UiPrimitives.js";
+} from "../components/UiPrimitives.js?v=20260508b";
 
 function normalizeWorkspacePath(value) {
   const text = String(value || "").trim();
@@ -33,49 +33,83 @@ function toContainerPath(value) {
 
 function buildEarlyStoppingDefaults(profile) {
   const defaults = profile?.early_stopping_defaults || {};
+  const metricKey = String(defaults.metric_key || "validation_curve");
   return {
     early_stopping_enabled: Boolean(defaults.enabled),
-    early_stopping_metric: String(defaults.metric || ""),
-    early_stopping_mode: String(defaults.mode || "min"),
+    early_stopping_metric_key: metricKey,
     early_stopping_patience: Number.parseInt(String(defaults.patience ?? 10), 10) || 10,
     early_stopping_min_delta: Number.parseFloat(String(defaults.min_delta ?? 0)) || 0,
   };
 }
 
+function buildDatasetDefaults(profile) {
+  const datasetValues = {};
+  const fields = Array.isArray(profile?.form_fields) ? profile.form_fields : [];
+  for (const field of fields) {
+    const key = String(field?.key || "").trim();
+    if (!key) continue;
+    datasetValues[key] = String(field?.default || "");
+  }
+  return datasetValues;
+}
+
 function buildInitialTrainingForm(trainingProfiles) {
   const profile = trainingProfiles[0] || null;
+  const supportedModes = Array.isArray(profile?.supported_modes) ? profile.supported_modes : [];
   return {
     profile_id: profile?.profile_id || "",
-    target_root: "./data/datasets/Full_Clouds",
-    training_data_root: "./data/datasets/Partial_Clouds",
+    form_values: {
+      partial_root: "./data/datasets/Partial_Clouds",
+      target_root: "./data/datasets/Full_Clouds",
+      ...buildDatasetDefaults(profile),
+    },
+    finetune_epochs: Number.parseInt(String(profile?.finetune_defaults?.default_epochs ?? 50), 10) || 50,
     train_percent: 80,
     val_percent: 10,
     test_percent: 10,
-    geometry_normalization: true,
-    mode: "scratch",
+    mode: supportedModes.includes("scratch") ? "scratch" : (supportedModes[0] || "scratch"),
     train_script_override: "",
     config_path_override: "",
     checkpoint_override: "",
     use_gpu: true,
+    geometry_normalization: Boolean(profile?.geometry_normalization_default ?? true),
     ...buildEarlyStoppingDefaults(profile),
   };
 }
 
-function pickDefaultCurveSelection(resolvedMetricViews, currentSelected) {
-  const primary = resolvedMetricViews?.primary?.resolved_tag || resolvedMetricViews?.train_curve?.resolved_tag || "";
-  const secondary = resolvedMetricViews?.secondary?.resolved_tag || resolvedMetricViews?.validation_curve?.resolved_tag || "";
-  if (currentSelected?.primary && currentSelected?.secondary) {
-    return currentSelected;
+function resolveAutomaticCurveTags(resolvedMetricViews, metricsCatalog, availableMetricTags) {
+  const tags = Array.isArray(availableMetricTags) ? availableMetricTags.filter(Boolean) : [];
+  const byKey = resolvedMetricViews || {};
+  const catalog = Array.isArray(metricsCatalog) ? metricsCatalog : [];
+
+  const primaryResolved = String(byKey?.primary?.resolved_tag || byKey?.train_curve?.resolved_tag || "").trim();
+  const secondaryResolved = String(byKey?.secondary?.resolved_tag || byKey?.validation_curve?.resolved_tag || "").trim();
+  if (primaryResolved || secondaryResolved) {
+    return [primaryResolved, secondaryResolved].filter(Boolean);
   }
-  return {
-    primary: currentSelected?.primary || primary || "",
-    secondary: currentSelected?.secondary || secondary || "",
-  };
+
+  const roleCandidates = [];
+  const trainItem = catalog.find((item) => item?.role === "train" || item?.key === "train_curve");
+  const validationItem = catalog.find((item) => item?.role === "val" || item?.role === "test" || item?.key === "validation_curve");
+  const trainResolved = String(byKey?.[trainItem?.key || ""]?.resolved_tag || "").trim();
+  const validationResolved = String(byKey?.[validationItem?.key || ""]?.resolved_tag || "").trim();
+  if (trainResolved) roleCandidates.push(trainResolved);
+  if (validationResolved && validationResolved !== trainResolved) roleCandidates.push(validationResolved);
+  if (roleCandidates.length > 0) {
+    return roleCandidates.slice(0, 2);
+  }
+
+  const epochOrMetric = tags.filter((tag) => {
+    const lower = String(tag || "").toLowerCase();
+    return lower.includes("/epoch/") || lower.startsWith("metric/");
+  });
+  return (epochOrMetric.length > 0 ? epochOrMetric : tags).slice(0, 2);
 }
 
 function statusTone(status) {
   if (status === "completed") return "success";
   if (status === "failed") return "danger";
+  if (status === "cancelled") return "warning";
   if (status === "running") return "warning";
   return "neutral";
 }
@@ -98,13 +132,18 @@ function renderEarlyHint(currentEarlyState) {
   return React.createElement(InlineHint, props, text);
 }
 
+function lastMetricPoint(points) {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  return points[points.length - 1] || null;
+}
+
 export function TrainingView({ trainingProfiles }) {
   const [trainingRunId, setTrainingRunId] = useState("");
   const [trainingRun, setTrainingRun] = useState(null);
   const [trainingMetrics, setTrainingMetrics] = useState(null);
-  const [selectedMetricTags, setSelectedMetricTags] = useState({ primary: "", secondary: "" });
   const [trainingLogs, setTrainingLogs] = useState("");
   const [trainingBusy, setTrainingBusy] = useState(false);
+  const [trainingCancelBusy, setTrainingCancelBusy] = useState(false);
   const [trainingError, setTrainingError] = useState("");
   const [trainingCopyStatus, setTrainingCopyStatus] = useState("");
   const [trainingForm, setTrainingForm] = useState(() => buildInitialTrainingForm(trainingProfiles));
@@ -133,18 +172,72 @@ export function TrainingView({ trainingProfiles }) {
     [trainingMetrics, trainingRun, selectedTrainingProfile],
   );
   const metricSeries = useMemo(() => trainingMetrics?.metric_series || {}, [trainingMetrics]);
-  const splitSum = Number(trainingForm.train_percent || 0) + Number(trainingForm.val_percent || 0) + Number(trainingForm.test_percent || 0);
+  const automaticCurveTags = useMemo(
+    () => resolveAutomaticCurveTags(resolvedMetricViews, metricsCatalog, availableMetricTags),
+    [resolvedMetricViews, metricsCatalog, availableMetricTags],
+  );
   const currentEarlyState = trainingMetrics?.early_stopping_state || trainingRun?.early_stopping_state || null;
+  const selectedModeOptions = useMemo(
+    () => (Array.isArray(selectedTrainingProfile?.supported_modes) ? selectedTrainingProfile.supported_modes : []),
+    [selectedTrainingProfile],
+  );
+  const datasetFields = useMemo(() => {
+    const configured = Array.isArray(selectedTrainingProfile?.form_fields) ? selectedTrainingProfile.form_fields : [];
+    const byKey = new Map(configured.map((item) => [String(item?.key || "").trim(), item]));
+    const defaults = [
+      {
+        key: "partial_root",
+        label: "Путь к обучающей выборке (partial)",
+        required: true,
+        default: "./data/datasets/Partial_Clouds",
+        placeholder: "./data/datasets/Partial_Clouds",
+        hint: "Папка с Partial_Clouds.",
+      },
+      {
+        key: "target_root",
+        label: "Путь к таргетам (full)",
+        required: true,
+        default: "./data/datasets/Full_Clouds",
+        placeholder: "./data/datasets/Full_Clouds",
+        hint: "Папка с Full_Clouds.",
+      },
+    ];
+    return defaults.map((item) => ({ ...item, ...(byKey.get(item.key) || {}) }));
+  }, [selectedTrainingProfile]);
+  const resolvedEarlyMetric = useMemo(() => {
+    const metricKey = String(trainingForm.early_stopping_metric_key || "validation_curve");
+    const metricItem = metricsCatalog.find((item) => String(item?.key || "") === metricKey) || null;
+    return String(metricItem?.default_tag || "");
+  }, [metricsCatalog, trainingForm.early_stopping_metric_key]);
+  const liveMetricRows = useMemo(() => {
+    const roleMap = {
+      [String(resolvedMetricViews?.primary?.resolved_tag || "")]: String(resolvedMetricViews?.primary?.role || ""),
+      [String(resolvedMetricViews?.secondary?.resolved_tag || "")]: String(resolvedMetricViews?.secondary?.role || ""),
+      [String(resolvedMetricViews?.train_curve?.resolved_tag || "")]: String(resolvedMetricViews?.train_curve?.role || ""),
+      [String(resolvedMetricViews?.validation_curve?.resolved_tag || "")]: String(resolvedMetricViews?.validation_curve?.role || ""),
+    };
+    return automaticCurveTags.map((tag, index) => {
+      const point = lastMetricPoint(metricSeries?.[tag]);
+      if (!point) return null;
+      const role = String(roleMap[tag] || "");
+      const label = role === "train" ? "Train" : (role === "val" || role === "test" ? "Validation" : (index === 0 ? "Train" : "Validation"));
+      const step = point.step ?? "n/a";
+      const value = Number(point.value);
+      return {
+        key: tag,
+        label,
+        tag,
+        step,
+        value: Number.isFinite(value) ? value.toFixed(6) : String(point.value),
+      };
+    }).filter(Boolean);
+  }, [automaticCurveTags, metricSeries]);
 
   useEffect(() => {
     if (!trainingForm.profile_id && trainingProfiles[0]?.profile_id) {
       setTrainingForm(buildInitialTrainingForm(trainingProfiles));
     }
   }, [trainingForm.profile_id, trainingProfiles]);
-
-  useEffect(() => {
-    setSelectedMetricTags((prev) => pickDefaultCurveSelection(resolvedMetricViews, prev));
-  }, [resolvedMetricViews]);
 
   useEffect(() => {
     if (!trainingRunId) return undefined;
@@ -154,13 +247,15 @@ export function TrainingView({ trainingProfiles }) {
       setTrainingRun(runPayload);
       setTrainingMetrics(metricsPayload);
       setTrainingLogs(runPayload.logs || "");
-      if (runPayload.status === "completed" || runPayload.status === "failed") {
+      if (runPayload.status === "completed" || runPayload.status === "failed" || runPayload.status === "cancelled") {
         setTrainingBusy(false);
+        setTrainingCancelBusy(false);
         return true;
       }
       return false;
     }, 2000, (e) => {
       setTrainingBusy(false);
+      setTrainingCancelBusy(false);
       setTrainingLogs(`Failed to poll training logs: ${e.message}`);
     });
   }, [trainingRunId]);
@@ -170,11 +265,13 @@ export function TrainingView({ trainingProfiles }) {
     setTrainingCopyStatus("");
     setTrainingRun(null);
     setTrainingMetrics(null);
-    setSelectedMetricTags(["", ""]);
     setTrainingLogs("");
     setTrainingBusy(true);
     try {
-      const payload = await postJson("/training/runs", trainingForm);
+      const payload = await postJson("/training/runs", {
+        ...trainingForm,
+        early_stopping_metric: resolvedEarlyMetric,
+      });
       setTrainingRun(payload);
       setTrainingLogs(payload.logs || "");
       setTrainingRunId(payload.run_id);
@@ -194,20 +291,60 @@ export function TrainingView({ trainingProfiles }) {
     }
   }
 
+  async function handleTrainingCancel() {
+    if (!trainingRunId || trainingCancelBusy) return;
+    setTrainingCancelBusy(true);
+    setTrainingError("");
+    try {
+      await postJson(`/training/runs/${trainingRunId}/cancel`, {});
+      const runPayload = await getJson(`/training/runs/${trainingRunId}`);
+      setTrainingRun(runPayload);
+      setTrainingLogs(runPayload.logs || "");
+      if (runPayload.status === "cancelled" || runPayload.status === "failed" || runPayload.status === "completed") {
+        setTrainingBusy(false);
+        setTrainingCancelBusy(false);
+      }
+    } catch (e) {
+      setTrainingCancelBusy(false);
+      setTrainingError(`Training cancel failed: ${e.message}`);
+    }
+  }
+
   function handleProfileChange(nextProfileId) {
     const profile = trainingProfiles.find((item) => item.profile_id === nextProfileId) || null;
+    const supportedModes = Array.isArray(profile?.supported_modes) ? profile.supported_modes : [];
     setTrainingForm((prev) => ({
       ...prev,
       profile_id: nextProfileId,
+      form_values: {
+        partial_root: "./data/datasets/Partial_Clouds",
+        target_root: "./data/datasets/Full_Clouds",
+        ...buildDatasetDefaults(profile),
+      },
+      finetune_epochs: Number.parseInt(String(profile?.finetune_defaults?.default_epochs ?? 50), 10) || 50,
+      train_percent: Number.isFinite(prev.train_percent) ? prev.train_percent : 80,
+      val_percent: Number.isFinite(prev.val_percent) ? prev.val_percent : 10,
+      test_percent: Number.isFinite(prev.test_percent) ? prev.test_percent : 10,
+      mode: supportedModes.includes(prev.mode) ? prev.mode : (supportedModes.includes("scratch") ? "scratch" : (supportedModes[0] || "scratch")),
+      train_script_override: "",
+      config_path_override: "",
+      checkpoint_override: "",
+      geometry_normalization: Boolean(profile?.geometry_normalization_default ?? true),
       ...buildEarlyStoppingDefaults(profile),
     }));
   }
 
+  const splitTotal = Number(trainingForm.train_percent || 0) + Number(trainingForm.val_percent || 0) + Number(trainingForm.test_percent || 0);
+  const splitValid = splitTotal === 100 && Number(trainingForm.val_percent || 0) >= 1;
+
   const canStart = !trainingBusy
     && Boolean(trainingForm.profile_id)
     && Boolean(selectedTrainingProfile?.ready)
-    && splitSum === 100
-    && (!trainingForm.early_stopping_enabled || Boolean(String(trainingForm.early_stopping_metric || "").trim()));
+    && splitValid
+    && (!trainingForm.early_stopping_enabled || Boolean(String(resolvedEarlyMetric || "").trim()));
+  const canCancel = Boolean(trainingRunId)
+    && !trainingCancelBusy
+    && (trainingRun?.status === "running" || trainingRun?.status === "pending" || trainingBusy);
 
   const header = React.createElement("div", { className: "section-card__header" },
     React.createElement("div", null,
@@ -239,15 +376,14 @@ export function TrainingView({ trainingProfiles }) {
     readyTrainingProfiles.map((profile) => React.createElement("option", { key: profile.profile_id, value: profile.profile_id }, `${profile.name} (${profile.model_id})`)),
     ),
   ),
-  selectedTrainingProfile && React.createElement(InlineHint, null, `Default config: ${selectedTrainingProfile.default_train_config}`),
+  selectedTrainingProfile?.default_train_config && React.createElement(InlineHint, null, `Default config: ${selectedTrainingProfile.default_train_config}`),
   React.createElement("div", { className: "split-grid", style: { marginTop: 14 } },
     React.createElement(Field, { label: "Режим обучения", compact: true },
       React.createElement("select", {
         value: trainingForm.mode,
         onChange: (e) => setTrainingForm((prev) => ({ ...prev, mode: e.target.value })),
       },
-      React.createElement("option", { value: "scratch" }, "Обучение с нуля"),
-      React.createElement("option", { value: "finetune" }, "Дообучение"),
+      selectedModeOptions.map((mode) => React.createElement("option", { key: mode, value: mode }, mode === "finetune" ? "Дообучение" : "Обучение с нуля")),
       ),
     ),
     React.createElement(Field, { label: "GPU", compact: true },
@@ -260,38 +396,27 @@ export function TrainingView({ trainingProfiles }) {
         "Использовать GPU",
       ),
     ),
-    React.createElement(Field, { label: "Геометрия", compact: true },
+    trainingForm.mode === "finetune" && React.createElement(Field, { label: "Эпох дообучения", compact: true },
+      React.createElement("input", {
+        type: "number",
+        min: 1,
+        value: trainingForm.finetune_epochs,
+        onChange: (e) => setTrainingForm((prev) => ({ ...prev, finetune_epochs: Number.parseInt(e.target.value || "1", 10) || 1 })),
+      }),
+    ),
+    React.createElement(Field, { label: "Нормализация", compact: true },
       React.createElement("label", { className: "checkbox-line" },
         React.createElement("input", {
           type: "checkbox",
-          checked: trainingForm.geometry_normalization,
+          checked: Boolean(trainingForm.geometry_normalization),
+          disabled: selectedTrainingProfile?.geometry_normalization_supported === false,
           onChange: (e) => setTrainingForm((prev) => ({ ...prev, geometry_normalization: e.target.checked })),
         }),
-        selectedTrainingProfile?.dataset_fields?.geometry_normalization_label || "Нормализовать геометрию",
+        "Нормализовать геометрию",
       ),
     ),
-  ));
-
-  const datasetSection = React.createElement(SectionCard, {
-    title: "Dataset",
-    subtitle: "Укажите target, partial dataset и разбиение по объектам.",
-  },
-  React.createElement(Field, { label: "Путь к target", hint: "Обычно это Full_Clouds." },
-    React.createElement("input", {
-      value: trainingForm.target_root,
-      onChange: (e) => setTrainingForm((prev) => ({ ...prev, target_root: e.target.value })),
-      placeholder: "./data/datasets/Full_Clouds",
-    }),
   ),
-  React.createElement(Field, { label: "Путь к обучающей выборке", hint: "Обычно это Partial_Clouds." },
-    React.createElement("input", {
-      value: trainingForm.training_data_root,
-      onChange: (e) => setTrainingForm((prev) => ({ ...prev, training_data_root: e.target.value })),
-      placeholder: "./data/datasets/Partial_Clouds",
-    }),
-  ),
-  React.createElement(InlineHint, null, selectedTrainingProfile?.dataset_structure_hint || "Partial одного target остаются в одном split."),
-  React.createElement("div", { className: "split-grid", style: { marginTop: 14 } },
+  React.createElement("div", { className: "split-grid", style: { marginTop: 12 } },
     React.createElement(Field, { label: "Train %", compact: true },
       React.createElement("input", {
         type: "number",
@@ -320,7 +445,56 @@ export function TrainingView({ trainingProfiles }) {
       }),
     ),
   ),
-  React.createElement(InlineHint, { tone: splitSum === 100 ? "default" : "warning" }, `Сумма split: ${splitSum}%. Нужно ровно 100%.`));
+  React.createElement(InlineHint, { tone: splitValid ? undefined : "warning" },
+    splitValid
+      ? "Рекомендуемый split: 80/10/10."
+      : (splitTotal !== 100
+        ? `Сумма split должна быть 100 (сейчас ${splitTotal}).`
+        : "Val должен быть >= 1, иначе валидация Snowflake будет пустой."),
+  ),
+  );
+
+  const datasetSection = React.createElement(SectionCard, {
+    title: "Dataset",
+    subtitle: "Укажите путь к partial и путь к target.",
+  },
+  ...datasetFields.map((field) => {
+    const key = String(field?.key || "").trim();
+    const value = String(trainingForm.form_values?.[key] || "");
+    const label = String(field?.label || key);
+    const hint = field?.hint ? String(field.hint) : undefined;
+    const placeholder = String(field?.placeholder || "");
+    if (Array.isArray(field?.options) && field.options.length > 0) {
+      return React.createElement(Field, { key, label, hint },
+        React.createElement("select", {
+          value,
+          onChange: (e) => setTrainingForm((prev) => ({
+            ...prev,
+            form_values: { ...(prev.form_values || {}), [key]: e.target.value },
+          })),
+        },
+        field.options.map((option) => {
+          const optionValue = typeof option === "string" ? option : String(option?.value || "");
+          const optionLabel = typeof option === "string" ? option : String(option?.label || optionValue);
+          return React.createElement("option", { key: `${key}-${optionValue}`, value: optionValue }, optionLabel);
+        })),
+      );
+    }
+    return React.createElement(Field, { key, label, hint },
+      React.createElement("input", {
+        value,
+        onChange: (e) => setTrainingForm((prev) => ({
+          ...prev,
+          form_values: { ...(prev.form_values || {}), [key]: e.target.value },
+        })),
+        placeholder,
+      }),
+    );
+  }),
+  React.createElement(InlineHint, null, selectedTrainingProfile?.dataset_structure_hint || "Partial одного target остаются в одном split."),
+  selectedTrainingProfile?.geometry_normalization_supported === false
+    ? React.createElement(InlineHint, { tone: "warning" }, "Для этого training profile нормализация геометрии отключена в preset.")
+    : null);
 
   const advancedChildren = [
     React.createElement(Field, { key: "train-script", label: "Train script override", hint: "Обычно оставляют пустым." },
@@ -330,14 +504,19 @@ export function TrainingView({ trainingProfiles }) {
         placeholder: selectedTrainingProfile?.default_train_script || "./external_models/SnowflakeNet/completion/train.py",
       }),
     ),
-    React.createElement(Field, { key: "config", label: "Config override", hint: "Например, 8192-конфиг для fine-tune." },
-      React.createElement("input", {
-        value: trainingForm.config_path_override,
-        onChange: (e) => setTrainingForm((prev) => ({ ...prev, config_path_override: e.target.value })),
-        placeholder: selectedTrainingProfile?.default_train_config || "./external_models/SnowflakeNet/completion/configs/c3d_cd2.yaml",
-      }),
-    ),
   ];
+
+  if (selectedTrainingProfile?.supports_config_override !== false) {
+    advancedChildren.push(
+      React.createElement(Field, { key: "config", label: "Config override", hint: "Например, альтернативный train config." },
+        React.createElement("input", {
+          value: trainingForm.config_path_override,
+          onChange: (e) => setTrainingForm((prev) => ({ ...prev, config_path_override: e.target.value })),
+          placeholder: selectedTrainingProfile?.default_train_config || "",
+        }),
+      ),
+    );
+  }
 
   if (trainingForm.mode === "finetune") {
     advancedChildren.push(
@@ -366,26 +545,12 @@ export function TrainingView({ trainingProfiles }) {
 
   if (trainingForm.early_stopping_enabled) {
     advancedChildren.push(
-      React.createElement(Field, {
-        key: "metric-tag",
-        label: "Metric tag",
-        hint: availableMetricTags.length > 0 ? `Доступно сейчас: ${availableMetricTags.join(", ")}` : "Если тег пока неизвестен, сначала запустите run и посмотрите доступные метрики справа.",
-      },
-      React.createElement("input", {
-        value: trainingForm.early_stopping_metric,
-        onChange: (e) => setTrainingForm((prev) => ({ ...prev, early_stopping_metric: e.target.value })),
-        placeholder: selectedTrainingProfile?.early_stopping_defaults?.metric || "Loss/Epoch/cd_p3",
-      })),
+      React.createElement(InlineHint, { key: "early-auto" },
+        resolvedEarlyMetric
+          ? `Validation curve будет мониториться автоматически: ${resolvedEarlyMetric}.`
+          : "Автоматическая validation metric пока не определилась для этого training preset.",
+      ),
       React.createElement("div", { key: "early-grid", className: "split-grid" },
-        React.createElement(Field, { label: "Mode", compact: true },
-          React.createElement("select", {
-            value: trainingForm.early_stopping_mode,
-            onChange: (e) => setTrainingForm((prev) => ({ ...prev, early_stopping_mode: e.target.value })),
-          },
-          React.createElement("option", { value: "min" }, "min"),
-          React.createElement("option", { value: "max" }, "max"),
-          ),
-        ),
         React.createElement(Field, { label: "Patience", compact: true },
           React.createElement("input", {
             type: "number",
@@ -404,6 +569,7 @@ export function TrainingView({ trainingProfiles }) {
           }),
         ),
       ),
+      React.createElement(InlineHint, { key: "direction-hint" }, "Направление метрики берётся из training preset автоматически."),
     );
   }
 
@@ -414,6 +580,12 @@ export function TrainingView({ trainingProfiles }) {
         onClick: handleTrainingStart,
         disabled: !canStart,
       }, trainingBusy ? "Обучение запущено..." : "Запустить обучение"),
+      React.createElement("button", {
+        type: "button",
+        className: "button-secondary",
+        onClick: handleTrainingCancel,
+        disabled: !canCancel,
+      }, trainingCancelBusy ? "Останавливаем..." : "Остановить обучение"),
     ),
   );
 
@@ -422,15 +594,15 @@ export function TrainingView({ trainingProfiles }) {
   }
 
   const advancedSection = React.createElement(CollapsibleSection, {
-    title: "Advanced",
-    subtitle: "Редкие override-настройки и тонкая настройка early stopping.",
+    title: "Настройки run",
+    subtitle: "Override-пути и базовые параметры early stopping.",
   }, ...advancedChildren);
 
   const leftColumn = React.createElement("div", { className: "training-main" }, trainingSection, datasetSection, advancedSection);
 
   const statusChildren = [
     React.createElement("div", { key: "badges", className: "status-stack", style: { marginBottom: 14 } },
-      React.createElement(StatusBadge, { tone: splitSum === 100 ? "success" : "warning" }, `Split: ${splitSum}%`),
+      React.createElement(StatusBadge, { tone: trainingForm.geometry_normalization ? "success" : "neutral" }, trainingForm.geometry_normalization ? "Normalization: on" : "Normalization: off"),
       selectedTrainingProfile && React.createElement(StatusBadge, { tone: selectedTrainingProfile.ready ? "success" : "warning" }, selectedTrainingProfile.ready ? "Model ready" : "Model not ready"),
       currentEarlyState && React.createElement(StatusBadge, { tone: currentEarlyState.stopped_early ? "warning" : currentEarlyState.supported ? "success" : "neutral" }, currentEarlyState.enabled ? "Early stopping on" : "Early stopping off"),
     ),
@@ -463,104 +635,43 @@ export function TrainingView({ trainingProfiles }) {
     subtitle: "Краткая сводка по текущему run и датасету.",
   }, ...statusChildren);
 
-  const chartControls = availableMetricTags.length > 0
-    ? React.createElement("div", { className: "metric-picker-grid" },
-      React.createElement(Field, { label: "Кривая обучения", compact: true },
-        React.createElement("select", {
-          value: selectedMetricTags.primary || "",
-          onChange: (e) => setSelectedMetricTags((prev) => ({ ...prev, primary: e.target.value })),
-        },
-        React.createElement("option", { value: "" }, "Недоступно"),
-        metricsCatalog
-          .filter((item) => item.role === "train" || item.key === "train_curve")
-          .map((item) => {
-            const view = resolvedMetricViews[item.key] || {};
-            return React.createElement(
-              "option",
-              {
-                key: `primary-${item.key}`,
-                value: view.resolved_tag || "",
-                disabled: !view.resolved_tag,
-              },
-              item.label,
-            );
-          }),
-        ),
-      ),
-      React.createElement(Field, { label: "Кривая валидации", compact: true },
-        React.createElement("select", {
-          value: selectedMetricTags.secondary || "",
-          onChange: (e) => setSelectedMetricTags((prev) => ({ ...prev, secondary: e.target.value })),
-        },
-        React.createElement("option", { value: "" }, "Недоступно"),
-        metricsCatalog
-          .filter((item) => item.role === "val" || item.role === "test" || item.key === "validation_curve")
-          .map((item) => {
-            const view = resolvedMetricViews[item.key] || {};
-            return React.createElement(
-              "option",
-              {
-                key: `secondary-${item.key}`,
-                value: view.resolved_tag || "",
-                disabled: !view.resolved_tag,
-              },
-              item.label,
-            );
-          }),
-        ),
-      ),
-    )
-    : null;
-
   const selectedSeriesLabels = {
-    [selectedMetricTags.primary]: "Кривая обучения",
-    [selectedMetricTags.secondary]: "Кривая валидации",
+    [automaticCurveTags[0] || ""]: "Кривая обучения",
+    [automaticCurveTags[1] || ""]: "Кривая валидации",
   };
-
-  const rawMetricsSection = availableMetricTags.length > 0
-    ? React.createElement(CollapsibleSection, {
-      title: "Advanced metrics",
-      subtitle: "Сырые internal metric tags для диагностики и ручного выбора.",
-    },
-    React.createElement(Field, { label: "Raw tag: левая кривая", compact: true },
-      React.createElement("select", {
-        value: selectedMetricTags.primary || "",
-        onChange: (e) => setSelectedMetricTags((prev) => ({ ...prev, primary: e.target.value })),
-      },
-      React.createElement("option", { value: "" }, "Выберите raw tag"),
-      availableMetricTags.map((tag) => React.createElement("option", { key: `raw-primary-${tag}`, value: tag }, tag)),
-      ),
+  const selectedSeriesRoles = {
+    [automaticCurveTags[0] || ""]: String(
+      resolvedMetricViews?.primary?.role
+      || resolvedMetricViews?.train_curve?.role
+      || "train",
     ),
-    React.createElement(Field, { label: "Raw tag: правая кривая", compact: true },
-      React.createElement("select", {
-        value: selectedMetricTags.secondary || "",
-        onChange: (e) => setSelectedMetricTags((prev) => ({ ...prev, secondary: e.target.value })),
-      },
-      React.createElement("option", { value: "" }, "Выберите raw tag"),
-      availableMetricTags.map((tag) => React.createElement("option", { key: `raw-secondary-${tag}`, value: tag }, tag)),
-      ),
-    ))
-    : null;
+    [automaticCurveTags[1] || ""]: String(
+      resolvedMetricViews?.secondary?.role
+      || resolvedMetricViews?.validation_curve?.role
+      || "val",
+    ),
+  };
 
   const liveCurvesSection = React.createElement(SectionCard, {
     title: "Live curves",
-    subtitle: "По умолчанию показываются понятные кривые обучения и валидации.",
+    subtitle: "График автоматически показывает кривые обучения и валидации, когда метрики появляются.",
   },
-  chartControls,
-  (!resolvedMetricViews?.primary?.resolved_tag || !resolvedMetricViews?.secondary?.resolved_tag) && React.createElement(
-    InlineHint,
-    { tone: "warning" },
-    "Не для всех метрик удалось автоматически подобрать понятные alias-имена. Ниже доступны raw tags.",
-  ),
   React.createElement(MetricChart, {
     metricSeries,
-    selectedTags: [selectedMetricTags.primary, selectedMetricTags.secondary],
+    selectedTags: automaticCurveTags,
     seriesLabels: selectedSeriesLabels,
+    seriesRoles: selectedSeriesRoles,
     emptyText: trainingRun?.metrics_history_available
-      ? "История метрик есть, выберите теги сверху."
+      ? "Метрики уже пишутся, но подходящие кривые ещё не появились."
       : "История метрик пока недоступна. Для моделей без SummaryWriter графики не появятся.",
   }),
-  rawMetricsSection);
+  liveMetricRows.length > 0
+    ? React.createElement("div", { className: "stats-grid", style: { marginTop: 10 } },
+      ...liveMetricRows.map((row) => renderStatTile(`${row.label} step`, row.step)),
+      ...liveMetricRows.map((row) => renderStatTile(`${row.label} value`, row.value)),
+    )
+    : React.createElement(InlineHint, null, "Числовые значения метрик появятся после первых записей в metric history."),
+  );
 
   const outputsChildren = [];
   if (trainingRun?.best_checkpoint_path) {
@@ -597,3 +708,4 @@ export function TrainingView({ trainingProfiles }) {
     React.createElement("div", { className: "training-shell" }, leftColumn, rightColumn),
   );
 }
+

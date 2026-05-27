@@ -188,7 +188,6 @@ def _looks_like_broken_cached_image(logs: str) -> bool:
         "importerror",
         "undefined symbol",
         "cannot open shared object file",
-        "no such file or directory",
     ]
     return any(marker in text for marker in markers)
 
@@ -292,6 +291,10 @@ def run_worker_in_docker(
             logs = container.logs(stdout=True, stderr=True).decode("utf-8", errors="ignore")
             if status_code != 0:
                 _append_task_log(task_id, f"[docker] Worker failed with exit={status_code}")
+                if logs.strip():
+                    max_len = 8000
+                    excerpt = logs if len(logs) <= max_len else logs[:max_len] + "\n...<truncated>..."
+                    _append_task_log(task_id, f"[docker] Worker logs:\n{excerpt}")
                 raise RuntimeError(f"Worker container exited with code {status_code}. Logs:\n{logs}")
 
             stream, _ = container.get_archive(in_container_output_dir)

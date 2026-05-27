@@ -1,7 +1,7 @@
 import React from "https://esm.sh/react@18.3.1";
 import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
 
-import { RootApp } from "./RootApp.js";
+import { RootApp } from "./RootApp.js?v=20260508b";
 
 function renderBootstrapError(message, detail = "") {
   const root = document.getElementById("root");

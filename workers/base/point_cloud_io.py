@@ -87,7 +87,32 @@ def _load_ply(path: Path) -> PointRows:
             return rows
     except Exception:
         pass
+    try:
+        return _load_ply_with_plyfile(path)
+    except Exception:
+        pass
     return _load_open3d_point_cloud(path)
+
+
+def _load_ply_with_plyfile(path: Path) -> PointRows:
+    try:
+        from plyfile import PlyData
+    except Exception as exc:
+        raise RuntimeError("Reading binary .ply point clouds requires plyfile") from exc
+    ply = PlyData.read(str(path))
+    if "vertex" not in ply:
+        raise ValueError(f"PLY file has no vertex element: {path}")
+    vertex = ply["vertex"]
+    names = getattr(vertex, "data", None).dtype.names if getattr(vertex, "data", None) is not None else None
+    if not names or not {"x", "y", "z"}.issubset(set(names)):
+        raise ValueError(f"PLY vertex element has no x/y/z fields: {path}")
+    x = vertex["x"]
+    y = vertex["y"]
+    z = vertex["z"]
+    rows: PointRows = []
+    for i in range(len(x)):
+        rows.append((float(x[i]), float(y[i]), float(z[i])))
+    return rows
 
 
 def _load_open3d_point_cloud(path: Path) -> PointRows:
