@@ -81,3 +81,5 @@ workers/**
 # Re-ignore caches inside tracked base scaffold
 workers/base/**/__pycache__/
 workers/base/**/*.py[cod]
+
+# PCPP_new/

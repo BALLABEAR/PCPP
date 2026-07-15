@@ -1,0 +1,25 @@
+.git
+.idea
+.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Large runtime artifacts
+training_runs/
+benchmark/
+examples/
+PCPP_new/
+
+# Local datasets
+data/
+
+# External model repos are mounted as volume; no need to send during build
+external_models/
+
+# Local docs/cache
+docs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

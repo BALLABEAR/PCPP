@@ -38,7 +38,7 @@ from workers.base.point_cloud_io import load_points, save_points
 
 _ACTIVE_RUNS_LOCK = threading.Lock()
 _ACTIVE_RUNS: dict[str, dict[str, Any]] = {}
-COMPLETION3D_EXPORTER_VERSION = "completion3d_h5_v6"
+COMPLETION3D_EXPORTER_VERSION = "completion3d_h5_v7"
 
 
 def utc_now() -> datetime:
@@ -254,7 +254,7 @@ def _build_render_values(*, preset: TrainingPreset, resolved: ResolvedTrainingRe
 
 
 def _list_point_files(root: Path) -> list[Path]:
-    allowed_suffixes = {".npy", ".ply", ".xyz", ".txt", ".pts"}
+    allowed_suffixes = {".npy", ".ply", ".pcd", ".xyz", ".txt", ".pts"}
     return [
         path
         for path in root.rglob("*")
@@ -549,6 +549,28 @@ def _build_dataset_pairs(
     return target_by_id, partial_groups
 
 
+def _split_root_candidates(root: Path) -> dict[str, Path]:
+    return {
+        "train": root / "train",
+        "val": root / "val",
+        "test": root / "test",
+    }
+
+
+def _detect_pre_split_layout(target_root: Path, partial_root: Path) -> bool:
+    target_splits = _split_root_candidates(target_root)
+    partial_splits = _split_root_candidates(partial_root)
+    return all(target_splits[name].is_dir() and partial_splits[name].is_dir() for name in ("train", "val", "test"))
+
+
+def _pick_points_subdir(root: Path, candidates: list[str]) -> Path:
+    for name in candidates:
+        candidate = root / name
+        if candidate.is_dir():
+            return candidate
+    return root
+
+
 def _hash_dataset_inputs(
     *,
     format_name: str,
@@ -560,6 +582,7 @@ def _hash_dataset_inputs(
     geometry_normalization: bool,
     split_percentages: SplitPercentages,
     requested_gt_points: int | None,
+    split_mode: str,
 ) -> str:
     payload = {
         "format": format_name,
@@ -570,6 +593,7 @@ def _hash_dataset_inputs(
         "partial_delimiter": partial_delimiter,
         "geometry_normalization": bool(geometry_normalization),
         "requested_gt_points": int(requested_gt_points) if requested_gt_points is not None else None,
+        "split_mode": split_mode,
         "split_percentages": {
             "train": int(split_percentages.train),
             "val": int(split_percentages.val),
@@ -605,12 +629,13 @@ def _allocate_split_sizes(total: int, split_percentages: SplitPercentages) -> di
 
 def _export_completion3d_h5(
     *,
-    target_by_id: dict[str, Path],
-    partial_groups: dict[str, list[Path]],
+    target_by_id: dict[str, Path] | None,
+    partial_groups: dict[str, list[Path]] | None,
     export_root: Path,
     geometry_normalization: bool,
     split_percentages: SplitPercentages,
     requested_gt_points: int | None,
+    pre_split_pairs: dict[str, tuple[dict[str, Path], dict[str, list[Path]]]] | None = None,
 ) -> dict[str, str]:
     try:
         import numpy as np
@@ -641,52 +666,62 @@ def _export_completion3d_h5(
 
     exported_samples_count = 0
     gt_n_points: int | None = None
-    samples: list[tuple[str, Any, Any]] = []
+    split_samples: dict[str, list[tuple[str, Any, Any]]] = {"train": [], "val": [], "test": []}
 
-    for target_id, target_path in target_by_id.items():
-        partials = partial_groups.get(target_id) or []
-        if not partials:
-            continue
-        target_points = load_points(target_path)
-        centroid = [0.0, 0.0, 0.0]
-        scale = 1.0
-        if geometry_normalization:
-            centroid, scale = _centroid_and_scale(target_points)
-            target_points = _normalize_with_reference(target_points, centroid, scale)
+    source_pairs_by_split: dict[str, tuple[dict[str, Path], dict[str, list[Path]]]] = {}
+    if pre_split_pairs:
+        source_pairs_by_split = dict(pre_split_pairs)
+    else:
+        source_pairs_by_split = {
+            "all": (dict(target_by_id or {}), dict(partial_groups or {})),
+        }
 
-        target_points_np = np.asarray(target_points, dtype=np.float32)
-        if target_points_np.ndim != 2:
-            raise ValueError(
-                f"Target cloud '{target_path}' must be rank-2 array [N,3], got shape={tuple(target_points_np.shape)}."
-            )
-        if requested_gt_points is not None:
-            current = int(target_points_np.shape[0])
-            if current > requested_gt_points:
-                target_points_np = target_points_np[:requested_gt_points]
-            elif current < requested_gt_points:
-                if current <= 0:
-                    raise ValueError(f"Target cloud '{target_path}' is empty and cannot be resized.")
-                needed = requested_gt_points - current
-                reps = (needed + current - 1) // current
-                padded = np.tile(target_points_np, (reps, 1))[:needed]
-                target_points_np = np.concatenate([target_points_np, padded], axis=0)
-        current_gt_n_points = int(target_points_np.shape[0])
-        if gt_n_points is None:
-            gt_n_points = current_gt_n_points
-        elif current_gt_n_points != gt_n_points:
-            raise ValueError(
-                "completion3d_h5 exporter requires a fixed GT point count across targets. "
-                f"Found both {gt_n_points} and {current_gt_n_points} points."
-            )
-
-        for idx, partial_path in enumerate(partials):
-            partial_id = f"{target_id}__{idx:03d}"
-            partial_points = load_points(partial_path)
+    for source_split, (source_targets, source_partials) in source_pairs_by_split.items():
+        for target_id, target_path in source_targets.items():
+            partials = source_partials.get(target_id) or []
+            if not partials:
+                continue
+            target_points = load_points(target_path)
+            centroid = [0.0, 0.0, 0.0]
+            scale = 1.0
             if geometry_normalization:
-                partial_points = _normalize_with_reference(partial_points, centroid, scale)
-            partial_points_np = np.asarray(partial_points, dtype=np.float32)
-            samples.append((partial_id, partial_points_np, target_points_np))
-            exported_samples_count += 1
+                centroid, scale = _centroid_and_scale(target_points)
+                target_points = _normalize_with_reference(target_points, centroid, scale)
+
+            target_points_np = np.asarray(target_points, dtype=np.float32)
+            if target_points_np.ndim != 2:
+                raise ValueError(
+                    f"Target cloud '{target_path}' must be rank-2 array [N,3], got shape={tuple(target_points_np.shape)}."
+                )
+            if requested_gt_points is not None:
+                current = int(target_points_np.shape[0])
+                if current > requested_gt_points:
+                    target_points_np = target_points_np[:requested_gt_points]
+                elif current < requested_gt_points:
+                    if current <= 0:
+                        raise ValueError(f"Target cloud '{target_path}' is empty and cannot be resized.")
+                    needed = requested_gt_points - current
+                    reps = (needed + current - 1) // current
+                    padded = np.tile(target_points_np, (reps, 1))[:needed]
+                    target_points_np = np.concatenate([target_points_np, padded], axis=0)
+            current_gt_n_points = int(target_points_np.shape[0])
+            if gt_n_points is None:
+                gt_n_points = current_gt_n_points
+            elif current_gt_n_points != gt_n_points:
+                raise ValueError(
+                    "completion3d_h5 exporter requires a fixed GT point count across targets. "
+                    f"Found both {gt_n_points} and {current_gt_n_points} points."
+                )
+
+            for idx, partial_path in enumerate(partials):
+                partial_id = f"{target_id}__{idx:03d}"
+                partial_points = load_points(partial_path)
+                if geometry_normalization:
+                    partial_points = _normalize_with_reference(partial_points, centroid, scale)
+                partial_points_np = np.asarray(partial_points, dtype=np.float32)
+                normalized_split = source_split if source_split in ("train", "val", "test") else "all"
+                split_samples.setdefault(normalized_split, []).append((partial_id, partial_points_np, target_points_np))
+                exported_samples_count += 1
 
     if exported_samples_count <= 0:
         raise ValueError(
@@ -695,25 +730,37 @@ def _export_completion3d_h5(
         )
     if gt_n_points is None or int(gt_n_points) <= 0:
         raise ValueError("Dataset export could not infer GT point count for N_POINTS.")
-    samples.sort(key=lambda item: item[0])
-    split_sizes = _allocate_split_sizes(len(samples), split_percentages)
-    if int(split_percentages.val) > 0 and int(split_sizes.get("val", 0)) <= 0:
-        raise ValueError(
-            "Dataset split produced 0 validation samples. Increase val_percent or use a larger dataset."
-        )
-    split_sequence: list[str] = []
-    for split in ("train", "val", "test"):
-        split_sequence.extend([split] * int(split_sizes[split]))
-    for idx, (partial_id, partial_points_np, target_points_np) in enumerate(samples):
-        split = split_sequence[idx] if idx < len(split_sequence) else "train"
-        partial_base, gt_base = split_dirs[split]
-        partial_h5 = partial_base / f"{partial_id}.h5"
-        with h5py.File(str(partial_h5), "w") as out:
-            out.create_dataset("data", data=partial_points_np)
-        gt_path = gt_base / f"{partial_id}.h5"
-        with h5py.File(str(gt_path), "w") as out:
-            out.create_dataset("data", data=target_points_np)
-        category[split].append(partial_id)
+    if pre_split_pairs:
+        for split in ("train", "val", "test"):
+            for partial_id, partial_points_np, target_points_np in sorted(split_samples.get(split, []), key=lambda item: item[0]):
+                partial_base, gt_base = split_dirs[split]
+                partial_h5 = partial_base / f"{partial_id}.h5"
+                with h5py.File(str(partial_h5), "w") as out:
+                    out.create_dataset("data", data=partial_points_np)
+                gt_path = gt_base / f"{partial_id}.h5"
+                with h5py.File(str(gt_path), "w") as out:
+                    out.create_dataset("data", data=target_points_np)
+                category[split].append(partial_id)
+    else:
+        samples = sorted(split_samples.get("all", []), key=lambda item: item[0])
+        split_sizes = _allocate_split_sizes(len(samples), split_percentages)
+        if int(split_percentages.val) > 0 and int(split_sizes.get("val", 0)) <= 0:
+            raise ValueError(
+                "Dataset split produced 0 validation samples. Increase val_percent or use a larger dataset."
+            )
+        split_sequence: list[str] = []
+        for split in ("train", "val", "test"):
+            split_sequence.extend([split] * int(split_sizes[split]))
+        for idx, (partial_id, partial_points_np, target_points_np) in enumerate(samples):
+            split = split_sequence[idx] if idx < len(split_sequence) else "train"
+            partial_base, gt_base = split_dirs[split]
+            partial_h5 = partial_base / f"{partial_id}.h5"
+            with h5py.File(str(partial_h5), "w") as out:
+                out.create_dataset("data", data=partial_points_np)
+            gt_path = gt_base / f"{partial_id}.h5"
+            with h5py.File(str(gt_path), "w") as out:
+                out.create_dataset("data", data=target_points_np)
+            category[split].append(partial_id)
 
     category_file_path = dataset_root / "Completion3D.json"
     category_file_path.write_text(json.dumps([category], ensure_ascii=True, indent=2), encoding="utf-8")
@@ -770,6 +817,9 @@ def _run_dataset_export(
     partial_key = str(contract.get("partial_root_key") or "partial_root").strip()
     pairing_mode = str(contract.get("pairing_mode") or "parent_dir_name").strip()
     partial_delimiter = str(contract.get("partial_delimiter") or "__").strip()
+    split_mode = str(contract.get("split_mode") or "auto").strip().lower()
+    partial_subdir = str(contract.get("partial_subdir") or "").strip()
+    target_subdir = str(contract.get("target_subdir") or "").strip()
     requested_gt_points_raw = str(dataset_export.get("gt_points_count") or "").strip()
     requested_gt_points: int | None = None
     if requested_gt_points_raw:
@@ -797,6 +847,17 @@ def _run_dataset_export(
         for step in list(getattr(preset, "preprocess", []) or [])
     )
     export_geometry_normalization = bool(geometry_normalization) and not has_pair_norm_preprocess
+    has_pre_split_layout = _detect_pre_split_layout(target_root, partial_root)
+    if split_mode not in {"auto", "random", "pre_split"}:
+        raise ValueError("dataset_contract.split_mode must be one of: auto, random, pre_split.")
+    if split_mode == "auto":
+        split_mode_effective = "pre_split" if has_pre_split_layout else "random"
+    elif split_mode == "pre_split":
+        if not has_pre_split_layout:
+            raise ValueError("dataset_contract.split_mode='pre_split' requires train/val/test subfolders in both roots.")
+        split_mode_effective = "pre_split"
+    else:
+        split_mode_effective = "random"
     exporter_version = COMPLETION3D_EXPORTER_VERSION if format_name == "completion3d_h5" else "v1"
     dataset_hash = _hash_dataset_inputs(
         format_name=format_name,
@@ -808,6 +869,7 @@ def _run_dataset_export(
         geometry_normalization=export_geometry_normalization,
         split_percentages=split_percentages,
         requested_gt_points=requested_gt_points,
+        split_mode=split_mode_effective,
     )
     cache_root = training_runs_root() / preset.model_id / "dataset_cache" / dataset_hash
     cache_hit = cache_root.exists()
@@ -856,12 +918,40 @@ def _run_dataset_export(
         cache_hit = False
 
     if not cache_hit:
-        target_by_id, partial_groups = _build_dataset_pairs(
-            target_root=target_root,
-            partial_root=partial_root,
-            pairing_mode=pairing_mode,
-            partial_delimiter=partial_delimiter,
-        )
+        target_by_id: dict[str, Path] | None = None
+        partial_groups: dict[str, list[Path]] | None = None
+        pre_split_pairs: dict[str, tuple[dict[str, Path], dict[str, list[Path]]]] | None = None
+        if split_mode_effective == "pre_split":
+            target_splits = _split_root_candidates(target_root)
+            partial_splits = _split_root_candidates(partial_root)
+            pre_split_pairs = {}
+            for split in ("train", "val", "test"):
+                split_target_root = target_splits[split]
+                split_partial_root = partial_splits[split]
+                if target_root.resolve() == partial_root.resolve():
+                    split_partial_root = (
+                        split_partial_root / partial_subdir
+                        if partial_subdir
+                        else _pick_points_subdir(split_partial_root, ["partial", "partials", "partial_clouds", "input"])
+                    )
+                    split_target_root = (
+                        split_target_root / target_subdir
+                        if target_subdir
+                        else _pick_points_subdir(split_target_root, ["gt", "full", "target", "targets", "full_clouds", "complete"])
+                    )
+                pre_split_pairs[split] = _build_dataset_pairs(
+                    target_root=split_target_root,
+                    partial_root=split_partial_root,
+                    pairing_mode=pairing_mode,
+                    partial_delimiter=partial_delimiter,
+                )
+        else:
+            target_by_id, partial_groups = _build_dataset_pairs(
+                target_root=target_root,
+                partial_root=partial_root,
+                pairing_mode=pairing_mode,
+                partial_delimiter=partial_delimiter,
+            )
         export_payload = _export_completion3d_h5(
             target_by_id=target_by_id,
             partial_groups=partial_groups,
@@ -869,16 +959,23 @@ def _run_dataset_export(
             geometry_normalization=export_geometry_normalization,
             split_percentages=split_percentages,
             requested_gt_points=requested_gt_points,
+            pre_split_pairs=pre_split_pairs,
         )
         if int(str(export_payload.get("exported_samples_count") or "0")) <= 0:
-            sample_target_ids = list(target_by_id.keys())[:5]
-            sample_partial_ids = []
-            for partial_id in list(partial_groups.keys())[:5]:
-                sample_partial_ids.append(partial_id)
+            sample_target_ids: list[str] = []
+            sample_partial_ids: list[str] = []
+            if split_mode_effective == "pre_split" and pre_split_pairs:
+                for split in ("train", "val", "test"):
+                    split_targets, split_partials = pre_split_pairs.get(split, ({}, {}))
+                    sample_target_ids.extend([f"{split}:{item}" for item in list(split_targets.keys())[:2]])
+                    sample_partial_ids.extend([f"{split}:{item}" for item in list(split_partials.keys())[:2]])
+            else:
+                sample_target_ids = list((target_by_id or {}).keys())[:5]
+                sample_partial_ids = list((partial_groups or {}).keys())[:5]
             append_log(
                 logs_path,
                 "[training-warning] Export produced no samples. "
-                f"pairing_mode={pairing_mode}; sample_target_ids={sample_target_ids}; "
+                f"split_mode={split_mode_effective}; pairing_mode={pairing_mode}; sample_target_ids={sample_target_ids}; "
                 f"sample_derived_partial_ids={sample_partial_ids}\n",
             )
     else:
@@ -897,7 +994,7 @@ def _run_dataset_export(
 
     append_log(
         logs_path,
-        f"[training] Dataset export {format_name}@{exporter_version}: {'cache-hit' if cache_hit else 'cache-miss'} ({dataset_hash}). samples={export_payload.get('exported_samples_count', 'unknown')}\n",
+        f"[training] Dataset export {format_name}@{exporter_version}: {'cache-hit' if cache_hit else 'cache-miss'} ({dataset_hash}). split_mode={split_mode_effective}. samples={export_payload.get('exported_samples_count', 'unknown')}\n",
     )
     return {
         "dataset_export_format": format_name,

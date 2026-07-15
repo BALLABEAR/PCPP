@@ -59,8 +59,8 @@ function buildInitialTrainingForm(trainingProfiles) {
   return {
     profile_id: profile?.profile_id || "",
     form_values: {
-      partial_root: "./data/datasets/Partial_Clouds",
-      target_root: "./data/datasets/Full_Clouds",
+      partial_root: "./data/datasets",
+      target_root: "./data/datasets",
       ...buildDatasetDefaults(profile),
     },
     finetune_epochs: Number.parseInt(String(profile?.finetune_defaults?.default_epochs ?? 50), 10) || 50,
@@ -189,17 +189,17 @@ export function TrainingView({ trainingProfiles }) {
         key: "partial_root",
         label: "Путь к обучающей выборке (partial)",
         required: true,
-        default: "./data/datasets/Partial_Clouds",
-        placeholder: "./data/datasets/Partial_Clouds",
-        hint: "Папка с Partial_Clouds.",
+        default: "./data/datasets",
+        placeholder: "./data/datasets",
+        hint: "Корень датасета со split train/val/test.",
       },
       {
         key: "target_root",
         label: "Путь к таргетам (full)",
         required: true,
-        default: "./data/datasets/Full_Clouds",
-        placeholder: "./data/datasets/Full_Clouds",
-        hint: "Папка с Full_Clouds.",
+        default: "./data/datasets",
+        placeholder: "./data/datasets",
+        hint: "Обычно тот же корень; target берутся из подпапки gt/full.",
       },
     ];
     return defaults.map((item) => ({ ...item, ...(byKey.get(item.key) || {}) }));
@@ -317,14 +317,14 @@ export function TrainingView({ trainingProfiles }) {
       ...prev,
       profile_id: nextProfileId,
       form_values: {
-        partial_root: "./data/datasets/Partial_Clouds",
-        target_root: "./data/datasets/Full_Clouds",
+        partial_root: "./data/datasets",
+        target_root: "./data/datasets",
         ...buildDatasetDefaults(profile),
       },
       finetune_epochs: Number.parseInt(String(profile?.finetune_defaults?.default_epochs ?? 50), 10) || 50,
-      train_percent: Number.isFinite(prev.train_percent) ? prev.train_percent : 80,
-      val_percent: Number.isFinite(prev.val_percent) ? prev.val_percent : 10,
-      test_percent: Number.isFinite(prev.test_percent) ? prev.test_percent : 10,
+      train_percent: 80,
+      val_percent: 10,
+      test_percent: 10,
       mode: supportedModes.includes(prev.mode) ? prev.mode : (supportedModes.includes("scratch") ? "scratch" : (supportedModes[0] || "scratch")),
       train_script_override: "",
       config_path_override: "",
@@ -334,8 +334,7 @@ export function TrainingView({ trainingProfiles }) {
     }));
   }
 
-  const splitTotal = Number(trainingForm.train_percent || 0) + Number(trainingForm.val_percent || 0) + Number(trainingForm.test_percent || 0);
-  const splitValid = splitTotal === 100 && Number(trainingForm.val_percent || 0) >= 1;
+  const splitValid = true;
 
   const canStart = !trainingBusy
     && Boolean(trainingForm.profile_id)
@@ -416,42 +415,7 @@ export function TrainingView({ trainingProfiles }) {
       ),
     ),
   ),
-  React.createElement("div", { className: "split-grid", style: { marginTop: 12 } },
-    React.createElement(Field, { label: "Train %", compact: true },
-      React.createElement("input", {
-        type: "number",
-        min: 0,
-        max: 100,
-        value: trainingForm.train_percent,
-        onChange: (e) => setTrainingForm((prev) => ({ ...prev, train_percent: Number.parseInt(e.target.value || "0", 10) || 0 })),
-      }),
-    ),
-    React.createElement(Field, { label: "Val %", compact: true },
-      React.createElement("input", {
-        type: "number",
-        min: 0,
-        max: 100,
-        value: trainingForm.val_percent,
-        onChange: (e) => setTrainingForm((prev) => ({ ...prev, val_percent: Number.parseInt(e.target.value || "0", 10) || 0 })),
-      }),
-    ),
-    React.createElement(Field, { label: "Test %", compact: true },
-      React.createElement("input", {
-        type: "number",
-        min: 0,
-        max: 100,
-        value: trainingForm.test_percent,
-        onChange: (e) => setTrainingForm((prev) => ({ ...prev, test_percent: Number.parseInt(e.target.value || "0", 10) || 0 })),
-      }),
-    ),
-  ),
-  React.createElement(InlineHint, { tone: splitValid ? undefined : "warning" },
-    splitValid
-      ? "Рекомендуемый split: 80/10/10."
-      : (splitTotal !== 100
-        ? `Сумма split должна быть 100 (сейчас ${splitTotal}).`
-        : "Val должен быть >= 1, иначе валидация Snowflake будет пустой."),
-  ),
+  React.createElement(InlineHint, null, "Split временно фиксирован: 80/10/10 (ручной ввод отключен)."),
   );
 
   const datasetSection = React.createElement(SectionCard, {

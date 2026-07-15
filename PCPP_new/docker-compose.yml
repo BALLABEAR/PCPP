@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: pcpp_new
+      POSTGRES_USER: pcpp_new
+      POSTGRES_PASSWORD: pcpp_new
+    ports:
+      - "5433:5432"
+    volumes:
+      - pcpp_new_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pcpp_new -d pcpp_new"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: orchestrator
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://pcpp_new:pcpp_new@postgres:5432/pcpp_new
+      WORKSPACE_ROOT: /workspace
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "3010:80"
+    depends_on:
+      - orchestrator
+
+volumes:
+  pcpp_new_postgres_data:
